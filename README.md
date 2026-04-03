@@ -309,5 +309,3 @@ php -l app/Http/Controllers/AdminController.php
 - Notification realtime hoàn chỉnh hơn cho employer / admin
 
 ---
-
-Nếu bạn dùng repo này để demo hoặc làm đồ án, nên giữ phần `docs/` đồng bộ với mỗi lần thay đổi DB để việc import từ SQL cũ không bị thiếu cột hoặc thiếu bảng.
