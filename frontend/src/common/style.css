@@ -1,0 +1,342 @@
+/* color */
+.bg-main {
+  background: linear-gradient(135deg, var(--app-primary), #28a7a1) !important;
+}
+.bg-mlight {
+  background-color: var(--app-highlight) !important;
+}
+.bg-disabled {
+  background-color: #eef3f7 !important;
+}
+.text-main {
+  color: var(--app-primary) !important;
+}
+.text-mlight {
+  color: #7fd0c5 !important;
+}
+.border-main {
+  border-color: var(--app-primary) !important;
+}
+.border-mlight {
+  border-color: var(--app-highlight) !important;
+}
+/* hover */
+/* hover text */
+.item-hover:hover {
+  color: blue;
+}
+.hover-text-bold:hover {
+  color: blue !important;
+}
+.hover-text-main:hover {
+  color: var(--app-primary) !important;
+}
+.hover-text-white:hover {
+  color: white !important;
+}
+.hover-link:hover {
+  color: blue !important;
+}
+.hover-underline:hover {
+  text-decoration: underline;
+}
+/* hover background */
+.hover-bg-1:hover {
+  background-color: #e8e2e25c !important;
+}
+.hover-bg-main:hover {
+  background-color: var(--app-primary) !important;
+}
+.hover-bg-light:hover {
+  background-color: var(--app-highlight) !important;
+}
+.hover-bg-primary:hover {
+  background-color: #0a58ca !important;
+}
+/* hover border */
+.hover-border-main:hover {
+  border-color: var(--app-primary) !important;
+}
+/* hover shadow */
+.hover-shadow-sm:hover {
+  box-shadow: var(--app-shadow-soft) !important;
+}
+
+/* font size */
+.ts-xs {
+  font-size: 12.75px;
+}
+.ts-sm {
+  font-size: 13.75px;
+}
+.ts-smd {
+  font-size: 15px;
+}
+.ts-md {
+  font-size: 16px;
+}
+.ts-lg {
+  font-size: 18px;
+}
+.ts-xl {
+  font-size: 20px;
+}
+.ts-xxl {
+  font-size: 24px;
+}
+.ts-17 {
+  font-size: 17px;
+}
+/* font weight */
+.fw-500 {
+  font-weight: 500 !important;
+}
+.fw-550 {
+  font-weight: 550 !important;
+}
+.fw-600 {
+  font-weight: 600 !important;
+}
+.fw-700 {
+  font-weight: 700 !important;
+}
+.fw-800 {
+  font-weight: 800 !important;
+}
+/* element width by percentage */
+.w-15 {
+  width: 15% !important;
+}
+.w-20 {
+  width: 20% !important;
+}
+.w-30 {
+  width: 30% !important;
+}
+.w-35 {
+  width: 35% !important;
+}
+.w-40 {
+  width: 40% !important;
+}
+.w-45 {
+  width: 45% !important;
+}
+.w-70 {
+  width: 70% !important;
+}
+.w-80 {
+  width: 80% !important;
+}
+.w-85 {
+  width: 85% !important;
+}
+.w-90 {
+  width: 90% !important;
+}
+.w-95 {
+  width: 95% !important;
+}
+/* custom cv input, textarea */
+.cv-input {
+  border: none;
+}
+.cv-input:focus {
+  outline: none;
+}
+.cv-input:hover {
+  outline: 1px dashed darkgray;
+}
+.resize-none {
+  resize: none;
+}
+/* z-index */
+.z-index-1 {
+  z-index: 1;
+}
+.z-index-2 {
+  z-index: 2;
+}
+.z-index-3 {
+  z-index: 3;
+}
+.z-index-4 {
+  z-index: 4;
+}
+/* others */
+.whitespace-preline {
+  white-space: pre-line;
+}
+.text-decoration-none {
+  text-decoration: none;
+}
+.pointer {
+  cursor: pointer;
+}
+
+.app-shell {
+  width: min(1280px, calc(100vw - 32px));
+  margin: 0 auto;
+}
+
+.app-surface {
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-lg);
+  box-shadow: var(--app-shadow-soft);
+  backdrop-filter: blur(10px);
+}
+
+.app-panel {
+  background: var(--app-surface-strong);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  box-shadow: var(--app-shadow-soft);
+}
+
+.app-card {
+  background: var(--app-surface-strong);
+  border: 1px solid var(--app-border);
+  border-radius: 24px;
+  box-shadow: var(--app-shadow-soft);
+  transition: transform 0.22s ease, box-shadow 0.22s ease,
+    border-color 0.22s ease;
+}
+
+.app-card:hover {
+  transform: translateY(-3px);
+  border-color: rgba(15, 127, 147, 0.2);
+  box-shadow: var(--app-shadow);
+}
+
+.app-section-title {
+  font-size: clamp(1.45rem, 2vw, 2rem);
+  font-weight: 800;
+  color: var(--app-title);
+  letter-spacing: -0.03em;
+}
+
+.app-section-subtitle {
+  color: var(--app-text-soft);
+  font-size: 0.98rem;
+}
+
+.app-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.95rem;
+  border-radius: 999px;
+  background: rgba(15, 127, 147, 0.08);
+  color: var(--app-primary-strong);
+  font-weight: 600;
+}
+
+.app-soft-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.35rem 0.8rem;
+  background: #edf3f8;
+  color: var(--app-text-soft);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.app-button-primary,
+.btn.bg-info,
+.btn-primary {
+  border: none !important;
+  border-radius: 999px !important;
+  background: linear-gradient(135deg, var(--app-primary), #28a7a1) !important;
+  color: #fff !important;
+  box-shadow: 0 12px 24px rgba(15, 127, 147, 0.22);
+}
+
+.app-button-primary:hover,
+.btn.bg-info:hover,
+.btn-primary:hover {
+  background: linear-gradient(135deg, var(--app-primary-strong), #1e8d88) !important;
+  box-shadow: 0 16px 28px rgba(15, 127, 147, 0.28);
+}
+
+.btn-outline-primary {
+  border-radius: 999px !important;
+  border-color: rgba(15, 127, 147, 0.25) !important;
+  color: var(--app-primary) !important;
+}
+
+.btn-outline-primary:hover {
+  color: #fff !important;
+  background: linear-gradient(135deg, var(--app-primary), #28a7a1) !important;
+}
+
+.btn-danger,
+.btn-outline-danger {
+  border-radius: 999px !important;
+}
+
+.form-control,
+.form-select,
+.input-group-text,
+.modal-content {
+  border-color: rgba(21, 45, 76, 0.12) !important;
+}
+
+.form-control,
+.form-select {
+  min-height: 46px;
+  border-radius: 14px !important;
+  background: rgba(255, 255, 255, 0.95) !important;
+}
+
+.input-group-text {
+  border-radius: 14px !important;
+}
+
+.table {
+  --bs-table-bg: transparent;
+  --bs-table-color: var(--app-text);
+  --bs-table-border-color: rgba(21, 45, 76, 0.08);
+}
+
+.table thead {
+  background: #f5f8fc;
+}
+
+.table thead th {
+  color: var(--app-title);
+  font-weight: 700;
+  border-bottom-width: 1px;
+}
+
+.table tbody tr {
+  vertical-align: middle;
+}
+/* custom bootstrap css */
+.form-control:focus {
+  color: #212529;
+  background-color: #fff;
+  border-color: rgba(15, 127, 147, 0.24);
+  outline: 0;
+  box-shadow: 0 0 0 0.2rem rgba(15, 127, 147, 0.08);
+}
+.form-select:focus {
+  color: #212529;
+  background-color: #fff;
+  border-color: rgba(15, 127, 147, 0.24);
+  outline: 0;
+  box-shadow: 0 0 0 0.2rem rgba(15, 127, 147, 0.08);
+}
+
+.modal-content {
+  border-radius: 24px !important;
+  overflow: hidden;
+  box-shadow: var(--app-shadow) !important;
+}
+
+.dropdown-menu {
+  border: 1px solid var(--app-border) !important;
+  border-radius: 18px !important;
+  box-shadow: var(--app-shadow-soft) !important;
+}

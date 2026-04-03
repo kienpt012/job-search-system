@@ -1,0 +1,6 @@
+.actBtn:hover {
+    color: blue;
+}
+.disabled-field{
+    background-color: #bbb8b83a;
+}

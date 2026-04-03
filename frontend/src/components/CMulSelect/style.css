@@ -1,0 +1,3 @@
+div.trigger::after {
+    content: none;
+}

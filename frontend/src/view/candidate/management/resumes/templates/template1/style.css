@@ -1,0 +1,20 @@
+.cv-bg-main {
+  background-color: #c6e2ff !important;
+}
+.cv-text-main {
+  color: #0e849c !important;
+}
+div .cv-border-main {
+  border-color: #0e849c !important;
+}
+div .cv-border-lighter {
+  border-color: #b8d6f7 !important;
+}
+.title {
+  font-size: 18px;
+  font-weight: 550;
+  color: #0e849c;
+}
+.content {
+  font-size: 14px;
+}
