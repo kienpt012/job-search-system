@@ -6,6 +6,10 @@ export default function AppImage({
   fallbackSrc,
   fallbackVariant = "default",
   alt = "",
+  loading,
+  decoding = "async",
+  fetchPriority,
+  priority = false,
   onError,
   ...props
 }) {
@@ -23,6 +27,9 @@ export default function AppImage({
       {...props}
       src={currentSrc}
       alt={alt}
+      loading={loading || (priority ? "eager" : "lazy")}
+      decoding={decoding}
+      fetchPriority={fetchPriority || (priority ? "high" : "auto")}
       onError={(event) => {
         if (currentSrc !== safeFallback) {
           setCurrentSrc(safeFallback);

@@ -55,18 +55,19 @@ class EmployerController extends Controller
 
     public function getHotList()
     {
-        $res = Employer::where('is_hot', 1)
+        $res = Employer::query()
+            ->withCount([
+                'jobs as job_num' => function ($query) {
+                    $query->where('is_active', 1);
+                },
+            ])
+            ->where('is_hot', 1)
             ->where('is_active', 1)
             ->orderByDesc('updated_at')
             ->orderByDesc('id')
+            ->select('id', 'name', 'logo')
             ->take(8)
             ->get();
-        for ($i = 0; $i < count($res); $i++) {
-            $job_num = Job::where('employer_id', $res[$i]['id'])
-                ->where('is_active', 1)
-                ->count();
-            $res[$i]['job_num'] = $job_num;
-        }
 
         return response()->json($res);
     }

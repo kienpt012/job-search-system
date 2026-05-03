@@ -1,7 +1,15 @@
 import "bootstrap/dist/js/bootstrap.js";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { BsBell, BsFillCircleFill } from "react-icons/bs";
+import {
+  BsArrowRight,
+  BsBell,
+  BsEnvelope,
+  BsFillCircleFill,
+  BsGeoAlt,
+  BsStars,
+  BsTelephone,
+} from "react-icons/bs";
 import "./layout.css";
 import { useDispatch, useSelector } from "react-redux";
 import authApi from "../../../api/auth";
@@ -15,26 +23,49 @@ import clsx from "clsx";
 import AppImage from "../../../components/AppImage";
 
 const TEXT = {
-  home: "Trang ch\u1ee7",
-  companies: "C\u00f4ng ty",
-  jobs: "Vi\u1ec7c l\u00e0m",
-  login: "\u0110\u0103ng nh\u1eadp",
-  signup: "\u0110\u0103ng k\u00fd",
-  employerArea: "\u0110\u0103ng tuy\u1ec3n, t\u00ecm \u1ee9ng vi\u00ean",
-  noNotification: "Kh\u00f4ng c\u00f3 th\u00f4ng b\u00e1o n\u00e0o",
-  account: "T\u00e0i kho\u1ea3n",
-  logout: "\u0110\u0103ng xu\u1ea5t",
+  home: "Trang chủ",
+  companies: "Công ty",
+  jobs: "Việc làm",
+  login: "Đăng nhập",
+  signup: "Đăng ký",
+  employerArea: "Đăng tuyển, tìm ứng viên",
+  noNotification: "Không có thông báo nào",
+  account: "Tài khoản",
+  logout: "Đăng xuất",
+  topbar: "Nền tảng tuyển dụng rõ ràng hơn cho ứng viên và nhà tuyển dụng.",
+  topbarCta: "Khu vực nhà tuyển dụng",
+  brandTitle: "Recruitment",
+  brandTagline:
+    "Kết nối việc làm, công ty và ứng viên theo cách gọn, rõ và dễ dùng hơn.",
+  footerHeroEyebrow: "Nền tảng tuyển dụng",
+  footerHeroTitle: "Tìm việc nhanh hơn. Đăng tuyển rõ ràng hơn.",
+  footerHeroDesc:
+    "Tập trung vào trải nghiệm tìm kiếm, xem doanh nghiệp và theo dõi cơ hội theo một hệ thống sạch, sáng và dễ hiểu.",
   footerIntro:
-    "N\u1ec1n t\u1ea3ng k\u1ebft n\u1ed1i doanh nghi\u1ec7p v\u1edbi \u1ee9ng vi\u00ean theo m\u1ed9t tr\u1ea3i nghi\u1ec7m tr\u1ef1c quan, nhanh v\u00e0 s\u1ea1ch h\u01a1n.",
-  contact: "Li\u00ean h\u1ec7",
-  explore: "Kh\u00e1m ph\u00e1",
-  phone: "\u0110i\u1ec7n tho\u1ea1i",
-  companyList: "Danh s\u00e1ch c\u00f4ng ty",
-  jobList: "Danh s\u00e1ch vi\u1ec7c l\u00e0m",
-  employerZone: "Khu v\u1ef1c nh\u00e0 tuy\u1ec3n d\u1ee5ng",
-  footerAddressLine1: "06 Tr\u1ea7n V\u0103n \u01a0n, Ph\u00fa H\u00f2a,",
-  footerAddressLine2: "Th\u1ee7 D\u1ea7u M\u1ed9t, B\u00ecnh D\u01b0\u01a1ng",
-  copyright: "\u00a9 2026 Recruitment. All rights reserved.",
+    "Recruitment xây dựng trải nghiệm tuyển dụng cân bằng hơn: bố cục rõ, thông tin dễ quét và hành động chính luôn nổi bật đúng chỗ.",
+  contact: "Liên hệ",
+  explore: "Khám phá",
+  resources: "Tài nguyên",
+  company: "Nền tảng",
+  phone: "Điện thoại",
+  companyList: "Danh sách công ty",
+  jobList: "Danh sách việc làm",
+  employerZone: "Khu vực nhà tuyển dụng",
+  candidateZone: "Không gian ứng viên",
+  privacy: "Chính sách bảo mật",
+  guide: "Hướng dẫn ứng tuyển",
+  support: "Hỗ trợ tài khoản",
+  footerAddressLine1: "06 Trần Văn Ơn, Phú Hòa,",
+  footerAddressLine2: "Thủ Dầu Một, Bình Dương",
+  footerEmail: "phantrungkien123456.you@gmail.com",
+  footerPhone: "0983-574-245",
+  footerLocation: "Bình Dương, Việt Nam",
+  footerStat1Label: "Việc làm nổi bật",
+  footerStat2Label: "Doanh nghiệp tuyển dụng",
+  footerStat3Label: "Trải nghiệm gọn hơn",
+  footerJobsCta: "Tìm việc ngay",
+  footerEmployerCta: "Đăng tuyển",
+  copyright: "© 2026 Recruitment. All rights reserved.",
 };
 
 const derivePageKey = (pathname) => {
@@ -160,180 +191,246 @@ function Layout(props) {
         current={curNotification}
       />
       <header className="site-header">
-        <div className="app-shell">
-          <div className="site-navbar">
-            <Link
-              className="nav-link site-brand"
-              to="/"
-              onClick={() => setCurrentPage("home")}
-            >
-              Recruit<span>ment</span>
-            </Link>
-            <nav className="site-nav">
+        <div className="site-topbar">
+          <div className="app-shell site-topbar__inner">
+            <div className="site-topbar__note">
+              <BsStars />
+              <span>{TEXT.topbar}</span>
+            </div>
+            <a href="/employer/login" className="site-topbar__action">
+              <span>{TEXT.topbarCta}</span>
+              <BsArrowRight />
+            </a>
+          </div>
+        </div>
+
+        <div className="site-navbar-wrap">
+          <div className="app-shell">
+            <div className="site-navbar">
               <Link
-                className={clsx(
-                  "nav-link site-nav-link",
-                  currentPage === "home" && "is-active"
-                )}
+                className="nav-link site-brand"
                 to="/"
                 onClick={() => setCurrentPage("home")}
               >
-                {TEXT.home}
+                <span className="site-brand__mark">R</span>
+                <span className="site-brand__copy">
+                  <strong>{TEXT.brandTitle}</strong>
+                  <small>{TEXT.brandTagline}</small>
+                </span>
               </Link>
-              <Link
-                className={clsx(
-                  "nav-link site-nav-link",
-                  currentPage === "companies" && "is-active"
-                )}
-                to="/companies"
-                onClick={() => setCurrentPage("companies")}
-              >
-                {TEXT.companies}
-              </Link>
-              <Link
-                className={clsx(
-                  "nav-link site-nav-link",
-                  currentPage === "jobs" && "is-active"
-                )}
-                to="/jobs"
-                onClick={() => setCurrentPage("jobs")}
-              >
-                {TEXT.jobs}
-              </Link>
-            </nav>
-            <div className="me-auto"></div>
-            {!isAuth ? (
-              <div className="site-auth fw-normal ts-md">
-                <button
-                  type="button"
-                  className="border-0 bg-transparent site-auth-link"
-                  data-bs-toggle="modal"
-                  data-bs-target="#login-box"
-                >
-                  {TEXT.login}
-                </button>
-                <Link to="/sign-up" className="text-decoration-none site-auth-link">
-                  {TEXT.signup}
-                </Link>
-                <a
-                  href="/employer/login"
-                  className="btn app-button-primary site-cta"
-                >
-                  {TEXT.employerArea}
-                </a>
-              </div>
-            ) : (
-              <div className="d-flex align-items-center sidebar-right">
-                <div
-                  className="position-relative"
-                  onMouseLeave={() => setShowListMsg(false)}
-                >
-                  <BsBell
-                    className="fs-3 me-4 pointer"
-                    onClick={() => setShowListMsg(true)}
-                  />
-                  {hasNew && (
-                    <div className="bell-new">
-                      <BsFillCircleFill />
-                    </div>
+
+              <nav className="site-nav">
+                <Link
+                  className={clsx(
+                    "nav-link site-nav-link",
+                    currentPage === "home" && "is-active"
                   )}
-                  <div
-                    className={clsx(
-                      "position-absolute bg-white z-index-1 msg-list fw-normal shadow",
-                      showListMsg ? "d-block" : "d-none"
-                    )}
+                  to="/"
+                  onClick={() => setCurrentPage("home")}
+                >
+                  {TEXT.home}
+                </Link>
+                <Link
+                  className={clsx(
+                    "nav-link site-nav-link",
+                    currentPage === "companies" && "is-active"
+                  )}
+                  to="/companies"
+                  onClick={() => setCurrentPage("companies")}
+                >
+                  {TEXT.companies}
+                </Link>
+                <Link
+                  className={clsx(
+                    "nav-link site-nav-link",
+                    currentPage === "jobs" && "is-active"
+                  )}
+                  to="/jobs"
+                  onClick={() => setCurrentPage("jobs")}
+                >
+                  {TEXT.jobs}
+                </Link>
+              </nav>
+
+              <div className="me-auto"></div>
+
+              {!isAuth ? (
+                <div className="site-auth fw-normal ts-md">
+                  <button
+                    type="button"
+                    className="border-0 bg-transparent site-auth-link site-auth-link--button"
+                    data-bs-toggle="modal"
+                    data-bs-target="#login-box"
                   >
-                    {bellMsgs.length > 0 ? (
-                      bellMsgs.map((item, index) => (
-                        <div
-                          key={`bell_msg_${item.id}_${index}`}
-                          className={
-                            "text-wrap px-2 py-2 rounded-3 hover-bg-1 pointer" +
-                            msgStyles[index]
-                          }
-                          onClick={() => handleReadMsg(item)}
-                        >
-                          {item.name}
-                        </div>
-                      ))
-                    ) : (
-                      <span className="ms-3">{TEXT.noNotification}</span>
+                    {TEXT.login}
+                  </button>
+                  <Link
+                    to="/sign-up"
+                    className="text-decoration-none site-auth-link site-auth-link--soft"
+                  >
+                    {TEXT.signup}
+                  </Link>
+                  <a href="/employer/login" className="btn app-button-primary site-cta">
+                    {TEXT.employerArea}
+                  </a>
+                </div>
+              ) : (
+                <div className="site-user-actions">
+                  <div
+                    className="position-relative"
+                    onMouseLeave={() => setShowListMsg(false)}
+                  >
+                    <button
+                      type="button"
+                      className="site-icon-button"
+                      onClick={() => setShowListMsg(true)}
+                    >
+                      <BsBell className="fs-5" />
+                    </button>
+                    {hasNew && (
+                      <div className="bell-new">
+                        <BsFillCircleFill />
+                      </div>
                     )}
+                    <div
+                      className={clsx(
+                        "position-absolute bg-white z-index-1 msg-list fw-normal shadow",
+                        showListMsg ? "d-block" : "d-none"
+                      )}
+                    >
+                      {bellMsgs.length > 0 ? (
+                        bellMsgs.map((item, index) => (
+                          <div
+                            key={`bell_msg_${item.id}_${index}`}
+                            className={
+                              "text-wrap px-2 py-2 rounded-3 hover-bg-1 pointer" +
+                              msgStyles[index]
+                            }
+                            onClick={() => handleReadMsg(item)}
+                          >
+                            {item.name}
+                          </div>
+                        ))
+                      ) : (
+                        <span className="ms-3">{TEXT.noNotification}</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="dropdown">
+                    <button
+                      type="button"
+                      className="site-user-chip dropdown-toggle"
+                      data-bs-toggle="dropdown"
+                    >
+                      <AppImage
+                        src={candidate?.avatar}
+                        fallbackVariant="avatar"
+                        alt="candidate_avatar"
+                        width="42"
+                        height="42"
+                        className="site-user-chip__avatar"
+                        style={{ objectFit: "cover" }}
+                      />
+                      <span className="site-user-chip__name">{candidateName}</span>
+                    </button>
+                    <ul className="dropdown-menu dropdown-menu-end">
+                      <li>
+                        <Link className="dropdown-item" to="/candidate">
+                          {TEXT.account}
+                        </Link>
+                      </li>
+                      <li>
+                        <button
+                          type="button"
+                          className="dropdown-item"
+                          onClick={handleLogout}
+                        >
+                          {TEXT.logout}
+                        </button>
+                      </li>
+                    </ul>
                   </div>
                 </div>
-                <div className="dropdown pt-1">
-                  <AppImage
-                    src={candidate?.avatar}
-                    fallbackVariant="avatar"
-                    alt="candidate_avatar"
-                    width="40"
-                    height="40"
-                    className="rounded-pill border border-2"
-                    style={{ objectFit: "cover" }}
-                  />
-                  &nbsp;
-                  <span
-                    style={{ fontSize: "16px", cursor: "pointer" }}
-                    className="dropdown-toggle"
-                    data-bs-toggle="dropdown"
-                  >
-                    {candidateName}
-                  </span>
-                  <ul className="dropdown-menu">
-                    <li>
-                      <Link className="dropdown-item" to="/candidate">
-                        {TEXT.account}
-                      </Link>
-                    </li>
-                    <li>
-                      <button
-                        type="button"
-                        className="dropdown-item"
-                        onClick={handleLogout}
-                      >
-                        {TEXT.logout}
-                      </button>
-                    </li>
-                  </ul>
-                </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </div>
       </header>
+
       <main className="page-body">
         {!isAuth && <Login />}
         {props.children}
       </main>
+
       <footer className="site-footer">
         <div className="app-shell">
-          <div className="site-footer__wrap">
-            <div className="row g-4">
-              <div className="col-md-4">
-                <div className="site-footer__brand">
-                  <div className="site-brand text-white mb-3">
-                    Recruit<span className="text-white">ment</span>
+          <div className="site-footer__hero">
+            <div className="site-footer__hero-copy">
+              <span className="site-footer__eyebrow">{TEXT.footerHeroEyebrow}</span>
+              <h2>{TEXT.footerHeroTitle}</h2>
+              <p>{TEXT.footerHeroDesc}</p>
+            </div>
+            <div className="site-footer__hero-actions">
+              <Link to="/jobs" className="btn app-button-primary">
+                {TEXT.footerJobsCta}
+              </Link>
+              <a href="/employer/login" className="site-footer__ghost-link">
+                {TEXT.footerEmployerCta}
+                <BsArrowRight />
+              </a>
+            </div>
+          </div>
+
+          <div className="site-footer__stats">
+            <div className="site-footer__stat-card">
+              <strong>24h</strong>
+              <span>{TEXT.footerStat1Label}</span>
+            </div>
+            <div className="site-footer__stat-card">
+              <strong>300+</strong>
+              <span>{TEXT.footerStat2Label}</span>
+            </div>
+            <div className="site-footer__stat-card">
+              <strong>1 nền tảng</strong>
+              <span>{TEXT.footerStat3Label}</span>
+            </div>
+          </div>
+
+          <div className="site-footer__panel">
+            <div className="site-footer__grid">
+              <div className="site-footer__col site-footer__col--brand">
+                <Link className="site-brand site-brand--footer nav-link" to="/">
+                  <span className="site-brand__mark">R</span>
+                  <span className="site-brand__copy">
+                    <strong>{TEXT.brandTitle}</strong>
+                    <small>{TEXT.brandTagline}</small>
+                  </span>
+                </Link>
+                <p className="site-footer__text site-footer__intro">{TEXT.footerIntro}</p>
+
+                <div className="site-footer__contact-stack">
+                  <a href={`tel:${TEXT.footerPhone}`} className="site-footer__contact-chip">
+                    <BsTelephone />
+                    <span>{TEXT.footerPhone}</span>
+                  </a>
+                  <a
+                    href={`mailto:${TEXT.footerEmail}`}
+                    className="site-footer__contact-chip"
+                  >
+                    <BsEnvelope />
+                    <span>{TEXT.footerEmail}</span>
+                  </a>
+                  <div className="site-footer__contact-chip">
+                    <BsGeoAlt />
+                    <span>{TEXT.footerLocation}</span>
                   </div>
-                  <p className="site-footer__text">{TEXT.footerIntro}</p>
                 </div>
               </div>
-              <div className="col-md-4">
-                <h5 className="site-footer__title">{TEXT.contact}</h5>
-                <p className="site-footer__text">
-                  Email: phantrungkien123456.you@gmail.com
-                </p>
-                <p className="site-footer__text">
-                  {TEXT.phone}: 0983-574-245
-                </p>
-                <p className="site-footer__text">
-                  {TEXT.footerAddressLine1}
-                  <br />
-                  {TEXT.footerAddressLine2}
-                </p>
-              </div>
-              <div className="col-md-4">
+
+              <div className="site-footer__col">
                 <h5 className="site-footer__title">{TEXT.explore}</h5>
-                <div className="d-flex flex-column gap-2">
+                <div className="site-footer__link-list">
                   <Link to="/" className="site-footer__link">
                     {TEXT.home}
                   </Link>
@@ -348,8 +445,55 @@ function Layout(props) {
                   </a>
                 </div>
               </div>
+
+              <div className="site-footer__col">
+                <h5 className="site-footer__title">{TEXT.resources}</h5>
+                <div className="site-footer__link-list">
+                  <Link to="/sign-up" className="site-footer__link">
+                    {TEXT.candidateZone}
+                  </Link>
+                  <button
+                    type="button"
+                    className="site-footer__link site-footer__link--button"
+                    data-bs-toggle="modal"
+                    data-bs-target="#login-box"
+                  >
+                    {TEXT.support}
+                  </button>
+                  <Link to="/jobs" className="site-footer__link">
+                    {TEXT.guide}
+                  </Link>
+                  <Link to="/" className="site-footer__link">
+                    {TEXT.privacy}
+                  </Link>
+                </div>
+              </div>
+
+              <div className="site-footer__col">
+                <h5 className="site-footer__title">{TEXT.contact}</h5>
+                <div className="site-footer__link-list">
+                  <span className="site-footer__text">
+                    {TEXT.footerAddressLine1}
+                    <br />
+                    {TEXT.footerAddressLine2}
+                  </span>
+                  <span className="site-footer__text">
+                    {TEXT.phone}: {TEXT.footerPhone}
+                  </span>
+                  <span className="site-footer__text">{TEXT.footerEmail}</span>
+                </div>
+              </div>
             </div>
-            <div className="site-footer__bottom">{TEXT.copyright}</div>
+
+            <div className="site-footer__bottom">
+              <div className="site-footer__legal">
+                <strong>{TEXT.company}</strong>
+                <span>
+                  {TEXT.footerAddressLine1} {TEXT.footerAddressLine2}
+                </span>
+              </div>
+              <div className="site-footer__copyright">{TEXT.copyright}</div>
+            </div>
           </div>
         </div>
       </footer>

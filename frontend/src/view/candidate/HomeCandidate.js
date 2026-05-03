@@ -1,12 +1,17 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
 import {
+  BsArrowUpRight,
+  BsBriefcase,
+  BsBuildings,
   BsCaretLeft,
   BsCaretRight,
+  BsCheck2Circle,
   BsCurrencyDollar,
   BsGeoAlt,
-  BsPlayCircleFill,
   BsPinMapFill,
+  BsPlayCircleFill,
+  BsStars,
 } from "react-icons/bs";
 import { Link, useNavigate } from "react-router-dom";
 import { useSelector } from "react-redux";
@@ -15,41 +20,52 @@ import AppImage from "../../components/AppImage";
 import "./custom.css";
 
 const TEXT = {
-  heroPill:
-    "Tuy\u1ec3n d\u1ee5ng hi\u1ec7n \u0111\u1ea1i cho doanh nghi\u1ec7p v\u00e0 \u1ee9ng vi\u00ean",
-  heroTitle1: "T\u00ecm vi\u1ec7c nhanh h\u01a1n.",
-  heroTitle2: "Ch\u1ecdn doanh nghi\u1ec7p t\u1ed1t h\u01a1n.",
+  heroEyebrow: "Nền tảng việc làm rõ ràng hơn",
+  heroTitleLine1: "Tìm việc phù hợp hơn.",
+  heroTitleLine2: "Xem doanh nghiệp rõ ràng hơn.",
   heroDesc:
-    "Giao di\u1ec7n m\u1edbi t\u1eadp trung v\u00e0o tr\u1ea3i nghi\u1ec7m duy\u1ec7t job, xem c\u00f4ng ty v\u00e0 qu\u1ea3n l\u00fd \u1ee9ng tuy\u1ec3n theo c\u00e1ch r\u00f5 r\u00e0ng h\u01a1n.",
-  exploreJobs: "Kh\u00e1m ph\u00e1 vi\u1ec7c l\u00e0m",
-  exploreCompanies: "Xem c\u00f4ng ty n\u1ed5i b\u1eadt",
-  hotJobs: "Vi\u1ec7c l\u00e0m hot",
-  hotCompanies: "C\u00f4ng ty hot",
-  currentPage: "Trang hi\u1ec7n t\u1ea1i",
-  featuredJobs: "Vi\u1ec7c l\u00e0m n\u1ed5i b\u1eadt",
+    "Bố cục mới ưu tiên thông tin thật sự quan trọng như vị trí, doanh nghiệp, mức lương và địa điểm để bạn quét nhanh, đọc dễ và ra quyết định gọn hơn.",
+  exploreJobs: "Khám phá việc làm",
+  exploreCompanies: "Xem công ty nổi bật",
+  heroTag1: "Việc làm mới mỗi ngày",
+  heroTag2: "Doanh nghiệp uy tín",
+  heroTag3: "Theo dõi cơ hội rõ ràng",
+  heroFeature1Title: "Tìm việc gọn hơn",
+  heroFeature1Desc: "Danh sách job ưu tiên thông tin quan trọng, không còn rối mắt.",
+  heroFeature2Title: "Lọc nhanh hơn",
+  heroFeature2Desc: "Duyệt theo công ty, khu vực và mức lương trong bố cục dễ quét.",
+  heroFeature3Title: "Tin tuyển dụng sáng hơn",
+  heroFeature3Desc: "Màu sắc, typography và card được đồng bộ để đọc thoải mái hơn.",
+  hotJobs: "Việc làm hot",
+  hotCompanies: "Công ty hot",
+  currentPage: "Trang hiện tại",
+  heroSlideOpen: "Mở nội dung này",
+  heroPanelTitle: "Doanh nghiệp được quan tâm hôm nay",
+  heroPanelDesc:
+    "Slide nổi bật giúp bạn xem nhanh nhà tuyển dụng và vị trí đang có sức hút cao.",
+  featuredJobs: "Việc làm nổi bật",
   featuredJobsSub:
-    "C\u00e1c c\u01a1 h\u1ed9i \u0111\u01b0\u1ee3c nh\u00e0 tuy\u1ec3n d\u1ee5ng \u01b0u ti\u00ean hi\u1ec3n th\u1ecb.",
-  viewAll: "Xem t\u1ea5t c\u1ea3",
-  salaryDeal: "Theo th\u1ecfa thu\u1eadn",
-  salaryUnit: "tri\u1ec7u VND",
-  nearbyTitlePrefix:
-    "\u0110\u00e2y l\u00e0 nh\u1eefng c\u00f4ng ty g\u1ea7n n\u01a1i \u1edf c\u1ee7a b\u1ea1n (<",
+    "Các cơ hội được nhà tuyển dụng ưu tiên hiển thị và cập nhật liên tục.",
+  viewAll: "Xem tất cả",
+  salaryDeal: "Theo thỏa thuận",
+  salaryUnit: "triệu VND",
+  nearbyTitlePrefix: "Doanh nghiệp gần nơi ở của bạn (",
   nearbyTitleSuffix: "km)",
-  nearbySubPrefix: "G\u1ee3i \u00fd theo v\u1ecb tr\u00ed \u0111\u00e3 ghim: ",
+  nearbySubPrefix: "Gợi ý theo vị trí đã ghim: ",
   nearbySubFallback:
-    "H\u1ec7 th\u1ed1ng \u0111ang \u01b0u ti\u00ean nh\u1eefng doanh nghi\u1ec7p \u0111ang tuy\u1ec3n g\u1ea7n b\u1ea1n.",
-  nearbyBadge: "Theo kho\u1ea3ng c\u00e1ch th\u1ef1c t\u1ebf",
-  nearbyLoading:
-    "\u0110ang t\u00ecm c\u00e1c c\u00f4ng ty ph\u00f9 h\u1ee3p g\u1ea7n b\u1ea1n...",
-  jobsCount: "vi\u1ec7c l\u00e0m",
-  nearbyEmptyPrefix:
-    "Hi\u1ec7n ch\u01b0a c\u00f3 c\u00f4ng ty \u0111ang tuy\u1ec3n trong b\u00e1n k\u00ednh ",
-  nearbyEmptySuffix: "km quanh n\u01a1i \u1edf c\u1ee7a b\u1ea1n.",
-  topCompanies: "Top c\u00f4ng ty n\u1ed5i b\u1eadt",
+    "Hệ thống đang ưu tiên những doanh nghiệp đang tuyển gần khu vực của bạn.",
+  nearbyBadge: "Theo khoảng cách thực tế",
+  nearbyLoading: "Đang tìm các công ty phù hợp gần bạn...",
+  jobsCount: "việc làm",
+  nearbyEmptyPrefix: "Hiện chưa có công ty đang tuyển trong bán kính ",
+  nearbyEmptySuffix: "km quanh nơi ở của bạn.",
+  topCompanies: "Doanh nghiệp nổi bật",
   topCompaniesSub:
-    "Ch\u1ecdn m\u1ed9t doanh nghi\u1ec7p c\u00f3 v\u1ecb th\u1ebf v\u00e0 nhu c\u1ea7u tuy\u1ec3n d\u1ee5ng r\u1ea5t cao.",
-  companyCatalog: "Xem danh m\u1ee5c",
-  heroSlideOpen: "M\u1edf n\u1ed9i dung n\u00e0y",
+    "Tập trung vào những công ty đang có nhu cầu tuyển dụng rõ ràng và profile tốt.",
+  companyCatalog: "Xem danh mục",
+  featuredBadge: "Ưu tiên hiển thị",
+  topCompanyBadge: "Doanh nghiệp nổi bật",
+  nearbyBadgeAlt: "Gần khu vực của bạn",
 };
 
 const initialNearbyCompanies = {
@@ -180,53 +196,61 @@ function HomeCandidate() {
   return (
     <div className="page-section">
       <section className="hero-panel">
-        <div className="row align-items-center g-4">
+        <div className="row align-items-stretch g-4">
           <div className="col-lg-6">
-            <div className="app-pill mb-3 bg-white text-dark">{TEXT.heroPill}</div>
-            <h1 className="display-5 fw-800 mb-3">
-              {TEXT.heroTitle1}
-              <br />
-              {TEXT.heroTitle2}
-            </h1>
-            <p className="mb-4 text-white-50 ts-smd">{TEXT.heroDesc}</p>
-            <div className="d-flex flex-wrap gap-3">
-              <Link to="/jobs" className="btn app-button-primary px-4 py-3">
-                {TEXT.exploreJobs}
-              </Link>
-              <Link to="/companies" className="btn btn-outline-light px-4 py-3">
-                {TEXT.exploreCompanies}
-              </Link>
-            </div>
-            <div className="row row-cols-2 row-cols-md-3 g-3 mt-4">
-              <div className="col">
-                <div className="metric-card">
-                  <div className="metric-card__label">{TEXT.hotJobs}</div>
-                  <div className="metric-card__value">{hotJobs.length}+</div>
-                </div>
+            <div className="hero-copy">
+              <div className="app-pill hero-pill">
+                <BsStars />
+                <span>{TEXT.heroEyebrow}</span>
               </div>
-              <div className="col">
-                <div className="metric-card">
-                  <div className="metric-card__label">{TEXT.hotCompanies}</div>
-                  <div className="metric-card__value">{hotCompanies.length}+</div>
-                </div>
+              <h1 className="hero-title">
+                {TEXT.heroTitleLine1}
+                <br />
+                {TEXT.heroTitleLine2}
+              </h1>
+              <p className="hero-copy__desc">{TEXT.heroDesc}</p>
+
+              <div className="hero-actions">
+                <Link to="/jobs" className="btn app-button-primary px-4 py-3">
+                  {TEXT.exploreJobs}
+                </Link>
+                <Link to="/companies" className="btn hero-secondary-button px-4 py-3">
+                  {TEXT.exploreCompanies}
+                </Link>
               </div>
-              <div className="col">
-                <div className="metric-card">
-                  <div className="metric-card__label">{TEXT.currentPage}</div>
-                  <div className="metric-card__value">0{curPage}</div>
-                </div>
+
+              <div className="hero-tags">
+                <span className="app-soft-badge">{TEXT.heroTag1}</span>
+                <span className="app-soft-badge">{TEXT.heroTag2}</span>
+                <span className="app-soft-badge">{TEXT.heroTag3}</span>
               </div>
             </div>
           </div>
+
           <div className="col-lg-6">
-            <div className="hero-panel__media" style={{ minHeight: "380px" }}>
+            <div className="hero-preview">
+              <div className="hero-preview__head">
+                <div>
+                  <div className="hero-preview__title">{TEXT.heroPanelTitle}</div>
+                  <div className="hero-preview__desc">{TEXT.heroPanelDesc}</div>
+                </div>
+                <button
+                  type="button"
+                  className="hero-preview__action"
+                  onClick={handleClickHeroSlide}
+                  disabled={!activeHeroSlide?.target_url}
+                >
+                  <BsArrowUpRight />
+                </button>
+              </div>
+
               <button
                 type="button"
                 className="hero-slider"
                 onClick={handleClickHeroSlide}
                 disabled={!activeHeroSlide?.target_url}
               >
-                <AppImage src={activeHeroSlide?.image} alt="hero_slide" />
+                <AppImage src={activeHeroSlide?.image} alt="hero_slide" priority />
                 <div className="hero-slider__overlay" />
                 <div className="hero-slider__badge">
                   <BsPlayCircleFill />
@@ -245,28 +269,90 @@ function HomeCandidate() {
                   ))}
                 </div>
               </button>
+
+              <div className="hero-stats">
+                <div className="metric-card">
+                  <div className="metric-card__icon">
+                    <BsBriefcase />
+                  </div>
+                  <div>
+                    <div className="metric-card__label">{TEXT.hotJobs}</div>
+                    <div className="metric-card__value">{hotJobs.length}+</div>
+                  </div>
+                </div>
+                <div className="metric-card">
+                  <div className="metric-card__icon">
+                    <BsBuildings />
+                  </div>
+                  <div>
+                    <div className="metric-card__label">{TEXT.hotCompanies}</div>
+                    <div className="metric-card__value">{hotCompanies.length}+</div>
+                  </div>
+                </div>
+                <div className="metric-card">
+                  <div className="metric-card__icon">
+                    <BsStars />
+                  </div>
+                  <div>
+                    <div className="metric-card__label">{TEXT.currentPage}</div>
+                    <div className="metric-card__value">0{curPage}</div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
       </section>
 
-      <section className="section-card mt-4">
+      <section className="hero-feature-grid">
+        <div className="hero-feature-card">
+          <div className="hero-feature-card__icon">
+            <BsBriefcase />
+          </div>
+          <div>
+            <strong>{TEXT.heroFeature1Title}</strong>
+            <p>{TEXT.heroFeature1Desc}</p>
+          </div>
+        </div>
+        <div className="hero-feature-card">
+          <div className="hero-feature-card__icon">
+            <BsCheck2Circle />
+          </div>
+          <div>
+            <strong>{TEXT.heroFeature2Title}</strong>
+            <p>{TEXT.heroFeature2Desc}</p>
+          </div>
+        </div>
+        <div className="hero-feature-card">
+          <div className="hero-feature-card__icon">
+            <BsBuildings />
+          </div>
+          <div>
+            <strong>{TEXT.heroFeature3Title}</strong>
+            <p>{TEXT.heroFeature3Desc}</p>
+          </div>
+        </div>
+      </section>
+
+      <section className="section-card section-card--soft mt-4">
         <div className="section-card__head">
           <div>
+            <div className="app-soft-badge mb-2">{TEXT.featuredBadge}</div>
             <h2 className="app-section-title mb-1">{TEXT.featuredJobs}</h2>
             <div className="app-section-subtitle">{TEXT.featuredJobsSub}</div>
           </div>
-          <Link to="/jobs" className="app-soft-badge text-decoration-none">
+          <Link to="/jobs" className="app-soft-badge text-decoration-none section-head-link">
             {TEXT.viewAll}
           </Link>
         </div>
         <div className="row g-4">
-          {hotJobs.map((job) => (
+          {hotJobs.map((job, index) => (
             <div key={"job" + job.id} className="col-xl-6">
-              <div className="job-feature-card">
-                <div className="d-flex gap-3">
+              <div className="job-feature-card" style={{ animationDelay: `${index * 90}ms` }}>
+                <div className="job-feature-card__glow" />
+                <div className="d-flex gap-3 align-items-start">
                   <Link to={`/companies/${job.employer.id}`} className="text-decoration-none">
-                    <div className="logo-frame">
+                    <div className="logo-frame logo-frame--elevated">
                       <AppImage
                         className="align-self-center"
                         src={job.employer.logo}
@@ -275,15 +361,19 @@ function HomeCandidate() {
                       />
                     </div>
                   </Link>
-                  <div className="flex-fill">
+                  <div className="flex-fill min-w-0">
+                    <div className="job-feature-card__topline">
+                      <span className="app-soft-badge">{TEXT.featuredBadge}</span>
+                    </div>
                     <Link
                       to={`/jobs/${job.id}`}
-                      className="nav-link fw-bold text-dark mb-2"
-                      style={{ fontSize: "1.28rem" }}
+                      className="nav-link fw-bold text-dark mb-2 job-feature-card__title text-multiline-2"
                     >
                       {job.jname}
                     </Link>
-                    <div className="text-secondary mb-2">{job.employer.name}</div>
+                    <div className="text-secondary mb-2 job-feature-card__company text-multiline-1">
+                      {job.employer.name}
+                    </div>
                     <div className="d-flex align-items-center gap-2 mb-2">
                       <BsCurrencyDollar className="text-main" />
                       {job.min_salary ? (
@@ -296,11 +386,11 @@ function HomeCandidate() {
                     </div>
                     <div className="d-flex align-items-center gap-2 text-secondary">
                       <BsGeoAlt className="text-main" />
-                      <span>
-                        {job.locations.map((item, index) => (
+                      <span className="text-multiline-1">
+                        {job.locations.map((item, locationIndex) => (
                           <span key={"job_location_" + job.id + "-" + item.id}>
                             {item.name}
-                            {index !== job.locations.length - 1 && ", "}
+                            {locationIndex !== job.locations.length - 1 && ", "}
                           </span>
                         ))}
                       </span>
@@ -316,7 +406,7 @@ function HomeCandidate() {
             <button
               key={"page" + item.label}
               type="button"
-              className="btn btn-sm border me-2 rounded-pill px-3 py-2"
+              className="btn btn-sm border me-2 rounded-pill px-3 py-2 home-page-nav"
               style={{
                 backgroundColor:
                   curPage.toString() === item.label ? "var(--app-primary)" : "#fff",
@@ -337,9 +427,10 @@ function HomeCandidate() {
       </section>
 
       {isCandidateAuth && nearbyCompanies.has_location && (
-        <section className="section-card mt-4">
+        <section className="section-card section-card--accent mt-4">
           <div className="section-card__head">
             <div>
+              <div className="app-soft-badge mb-2">{TEXT.nearbyBadgeAlt}</div>
               <h2 className="app-section-title mb-1">
                 {TEXT.nearbyTitlePrefix}
                 {nearbyCompanies.distance_limit_km}
@@ -357,14 +448,17 @@ function HomeCandidate() {
             <div className="text-secondary">{TEXT.nearbyLoading}</div>
           ) : nearbyCompanies.data.length > 0 ? (
             <div className="row g-4">
-              {nearbyCompanies.data.map((company) => (
+              {nearbyCompanies.data.map((company, index) => (
                 <div className="col-md-6 col-xl-3" key={"nearby_company" + company.id}>
-                  <div className="company-feature-card">
+                  <div
+                    className="company-feature-card company-feature-card--highlight"
+                    style={{ animationDelay: `${index * 90}ms` }}
+                  >
                     <Link
                       to={`/companies/${company.id}`}
                       className="text-decoration-none text-dark"
                     >
-                      <div className="logo-frame mx-auto mb-3">
+                      <div className="logo-frame mx-auto mb-3 logo-frame--elevated">
                         <AppImage
                           className="align-self-center"
                           src={company.logo}
@@ -372,8 +466,10 @@ function HomeCandidate() {
                           alt={"nearby_company_" + company.id}
                         />
                       </div>
-                      <div className="text-center fw-bold mb-2">{company.name}</div>
-                      <div className="text-center text-secondary small mb-3">
+                      <div className="text-center fw-bold mb-2 text-multiline-2">
+                        {company.name}
+                      </div>
+                      <div className="text-center text-secondary small mb-3 text-multiline">
                         {company.address}
                       </div>
                       <div className="d-flex justify-content-center flex-wrap gap-2">
@@ -398,25 +494,33 @@ function HomeCandidate() {
         </section>
       )}
 
-      <section className="section-card mt-4 mb-4">
+      <section className="section-card section-card--soft mt-4 mb-4">
         <div className="section-card__head">
           <div>
+            <div className="app-soft-badge mb-2">{TEXT.topCompanyBadge}</div>
             <h2 className="app-section-title mb-1">{TEXT.topCompanies}</h2>
             <div className="app-section-subtitle">{TEXT.topCompaniesSub}</div>
           </div>
-          <Link to="/companies" className="app-soft-badge text-decoration-none">
+          <Link
+            to="/companies"
+            className="app-soft-badge text-decoration-none section-head-link"
+          >
             {TEXT.companyCatalog}
           </Link>
         </div>
         <div className="row g-4">
-          {hotCompanies.map((company) => (
+          {hotCompanies.map((company, index) => (
             <div className="col-md-6 col-xl-3" key={"company" + company.id}>
-              <div className="company-feature-card">
+              <div
+                className="company-feature-card company-feature-card--grid"
+                style={{ animationDelay: `${index * 100}ms` }}
+              >
                 <Link
                   to={`/companies/${company.id}`}
                   className="text-decoration-none text-dark"
                 >
-                  <div className="logo-frame mx-auto mb-3">
+                  <div className="company-feature-card__ring" />
+                  <div className="logo-frame mx-auto mb-3 logo-frame--elevated">
                     <AppImage
                       className="align-self-center"
                       src={company.logo}
@@ -424,7 +528,9 @@ function HomeCandidate() {
                       alt={"hot_company" + company.id}
                     />
                   </div>
-                  <div className="text-center fw-bold mb-2">{company.name}</div>
+                  <div className="text-center fw-bold mb-2 text-multiline-2">
+                    {company.name}
+                  </div>
                   <div className="text-center">
                     <span className="app-soft-badge">
                       {company.job_num} {TEXT.jobsCount}

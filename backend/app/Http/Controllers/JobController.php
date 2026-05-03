@@ -79,13 +79,23 @@ class JobController extends Controller
     }
     public function getHotList()
     {
-        $res = Job::with(['employer', 'locations'])
+        $res = Job::with([
+            'employer:id,name,logo',
+            'locations:id,name',
+        ])
             ->join('employers', 'jobs.employer_id', '=', 'employers.id')
             ->where('jobs.is_hot', 1)
             ->where('jobs.is_active', 1)
             ->where('employers.is_active', 1)
             ->orderByDesc('jobs.created_at')
-            ->select('jobs.*')
+            ->select(
+                'jobs.id',
+                'jobs.employer_id',
+                'jobs.jname',
+                'jobs.min_salary',
+                'jobs.max_salary',
+                'jobs.created_at'
+            )
             ->paginate(6);
 
         return response()->json($res);
