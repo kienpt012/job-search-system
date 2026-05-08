@@ -8,6 +8,10 @@ const adminApi = {
   updateHeroSlideStatus: (id, params) =>
     adminAxios.post(`/admin/hero-slides/${id}/status`, params),
   deleteHeroSlide: (id) => adminAxios.delete(`/admin/hero-slides/${id}`),
+  getSkills: () => adminAxios.get("/jskills"),
+  createSkill: (params) => adminAxios.post("/jskills", params),
+  updateSkill: (id, params) => adminAxios.patch(`/jskills/${id}`, params),
+  deleteSkill: (id) => adminAxios.delete(`/jskills/${id}`),
   resolveSharedMapLink: (params) => adminAxios.post("/admin/resolveSharedMapLink", params),
   getJobs: (params = {}) => {
     const searchParams = new URLSearchParams();

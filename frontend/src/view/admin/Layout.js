@@ -5,6 +5,7 @@ import {
   BsBriefcaseFill,
   BsImages,
   BsShieldLockFill,
+  BsTagsFill,
 } from "react-icons/bs";
 import { useDispatch, useSelector } from "react-redux";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -17,6 +18,7 @@ const TEXT = {
   title: "Recruitment Control",
   dashboard: "B\u1ea3ng \u0111i\u1ec1u khi\u1ec3n",
   jobs: "Qu\u1ea3n l\u00fd vi\u1ec7c l\u00e0m",
+  skills: "Th\u01b0 vi\u1ec7n k\u1ef9 n\u0103ng",
   appearance: "Giao di\u1ec7n",
   loggedInAs: "\u0110\u0103ng nh\u1eadp v\u1edbi",
   logout: "\u0110\u0103ng xu\u1ea5t",
@@ -83,6 +85,17 @@ export default function AdminLayout({ children }) {
         >
           <BsBarChartFill />
           <span>{TEXT.dashboard}</span>
+        </button>
+
+        <button
+          type="button"
+          className={`admin-sidebar__link ${
+            location.pathname === "/admin/skills" ? "is-active" : ""
+          }`}
+          onClick={() => nav("/admin/skills")}
+        >
+          <BsTagsFill />
+          <span>{TEXT.skills}</span>
         </button>
 
         <button

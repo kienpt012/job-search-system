@@ -25,6 +25,9 @@ const jobApi = {
   getJobIndustries: (id) => {
     return commonAxios.get(`${prefix}/${id}/getJobIndustries`);
   },
+  getJobSkills: (id) => {
+    return commonAxios.get(`${prefix}/${id}/getJobSkills`);
+  },
   filter: (data) => {
     return commonAxios.post(`${prefix}/filter`, data);
   },

@@ -3,7 +3,7 @@ import { useForm } from "react-hook-form";
 import { AiOutlineLine } from "react-icons/ai";
 import jobApi from "../../../api/job";
 
-function JobDetail({ inf, jtypes, jlevels, industries, locations }) {
+function JobDetail({ inf, jtypes, jlevels, industries, locations, skills }) {
   const jobIndustries = inf.industries;
   const jobLocations = inf.locations;
   const {
@@ -15,6 +15,8 @@ function JobDetail({ inf, jtypes, jlevels, industries, locations }) {
   const [isEditIndustry, setIsEditIndustry] = useState(false);
   const [isEditLocation, setIsEditLocation] = useState(false);
   const [isEditSalary, setIsEditSalary] = useState(false);
+  const [isEditSkill, setIsEditSkill] = useState(false);
+  const [jobSkills, setJobSkills] = useState([]);
 
   const onSubmit = async (job_inf) => {
     console.log(job_inf);
@@ -41,6 +43,11 @@ function JobDetail({ inf, jtypes, jlevels, industries, locations }) {
           job_inf[key][j] = locations[job_inf[key][j]].id;
         }
       }
+      if (key === "skills") {
+        for (let j = 0; j < job_inf[key].length; j++) {
+          job_inf[key][j] = skills[job_inf[key][j]].id;
+        }
+      }
     }
     console.log(job_inf);
     await jobApi.update(inf.id, job_inf);
@@ -49,8 +56,21 @@ function JobDetail({ inf, jtypes, jlevels, industries, locations }) {
   };
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    const loadSkillData = async () => {
+      if (!inf?.id) {
+        setJobSkills([]);
+        return;
+      }
+
+      try {
+        setJobSkills(await jobApi.getJobSkills(inf.id));
+      } catch (error) {
+        setJobSkills([]);
+      }
+    };
+
+    loadSkillData();
+  }, [inf?.id]);
 
   return (
     <div className="modal modal-xl fade" id="jobDetail">
@@ -244,6 +264,61 @@ function JobDetail({ inf, jtypes, jlevels, industries, locations }) {
               {errors.amount?.type === "min" && (
                 <span className="text-danger">Hãy nhập 1 số lớn hơn 0</span>
               )}
+              <div className="mt-3">
+                <strong>Kỹ năng yêu cầu:</strong>
+                <div className="d-flex align-items-center mt-1">
+                  <div
+                    className="form-control disabled-field"
+                    style={{ width: "50%" }}
+                  >
+                    {!watch("skills") ? (
+                      <>
+                        {jobSkills.length > 0
+                          ? jobSkills.map((item, index) => (
+                              <span key={item.id}>
+                                {item.name}
+                                {index !== jobSkills.length - 1 && ", "}
+                              </span>
+                            ))
+                          : "Chưa chọn kỹ năng"}
+                      </>
+                    ) : (
+                      <>
+                        {watch("skills").map((item, index) => (
+                          <span key={"cur_skill" + index}>
+                            {skills[item].name}
+                            {index !== watch("skills").length - 1 && ", "}
+                          </span>
+                        ))}
+                      </>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-outline-primary ms-2"
+                    onClick={() => setIsEditSkill(!isEditSkill)}
+                  >
+                    {!isEditSkill ? "Sửa" : "OK"}
+                  </button>
+                </div>
+                {isEditSkill && (
+                  <div className="d-flex mt-2">
+                    <span>Chọn:</span>
+                    <select
+                      className="form-select w-25 ms-2"
+                      multiple
+                      size="6"
+                      {...register("skills")}
+                    >
+                      {skills.map((item, index) => (
+                        <option value={index} key={"skill" + item.id}>
+                          {item.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
               <div className="mt-2">
                 <div className="d-flex align-items-center">
                   <strong>Lương:</strong>

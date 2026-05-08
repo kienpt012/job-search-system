@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Events\NotifyCandidateEvent;
+use App\Models\Candidate;
 use App\Models\CandidateMessage;
 use App\Models\Employer;
 use App\Models\Job;
@@ -19,7 +20,13 @@ class EmployerController extends Controller
     public function index(Request $request)
     {
         $keyw = $request->query('keyword');
-        $query = Employer::query()->where('is_active', 1);
+        $query = Employer::query()
+            ->withCount([
+                'jobs as job_num' => function ($jobQuery) {
+                    $jobQuery->where('is_active', 1);
+                },
+            ])
+            ->where('is_active', 1);
 
         if ($keyw) {
             $query->whereRaw('LOWER(name) LIKE ?', ['%' . strtolower($keyw) . '%']);
@@ -56,6 +63,7 @@ class EmployerController extends Controller
     public function getHotList()
     {
         $res = Employer::query()
+            ->select('id', 'name', 'logo')
             ->withCount([
                 'jobs as job_num' => function ($query) {
                     $query->where('is_active', 1);
@@ -65,7 +73,6 @@ class EmployerController extends Controller
             ->where('is_active', 1)
             ->orderByDesc('updated_at')
             ->orderByDesc('id')
-            ->select('id', 'name', 'logo')
             ->take(8)
             ->get();
 
@@ -281,6 +288,354 @@ class EmployerController extends Controller
             ->get();
 
         return response()->json($candidates);
+    }
+
+    public function getRecommendedCandidates($job_id)
+    {
+        $job = Job::with('skills')->where([
+            ['id', '=', $job_id],
+            ['employer_id', '=', Auth::id()],
+        ])->firstOrFail();
+
+        $requiredSkills = $job->skills
+            ->pluck('name')
+            ->map(fn ($name) => strtolower(trim($name)))
+            ->filter()
+            ->values();
+
+        if ($requiredSkills->isEmpty()) {
+            return response()->json([]);
+        }
+
+        $candidates = Candidate::query()
+            ->with(['skills' => function ($query) {
+                $query->whereNull('resume_id');
+            }])
+            ->whereHas('skills', function ($query) use ($requiredSkills) {
+                $query->whereNull('resume_id')
+                    ->whereIn(DB::raw('LOWER(name)'), $requiredSkills->toArray());
+            })
+            ->get()
+            ->map(function ($candidate) use ($requiredSkills) {
+                $candidateSkills = $candidate->skills
+                    ->pluck('name')
+                    ->filter()
+                    ->values();
+
+                $matchedSkills = $candidateSkills
+                    ->filter(fn ($name) => $requiredSkills->contains(strtolower(trim($name))))
+                    ->unique()
+                    ->values();
+
+                return [
+                    'id' => $candidate->id,
+                    'firstname' => $candidate->firstname,
+                    'lastname' => $candidate->lastname,
+                    'email' => $candidate->email,
+                    'phone' => $candidate->phone,
+                    'skills' => $candidateSkills,
+                    'matched_skills' => $matchedSkills,
+                    'match_count' => $matchedSkills->count(),
+                    'match_percent' => round(($matchedSkills->count() / max($requiredSkills->count(), 1)) * 100),
+                ];
+            })
+            ->sortByDesc('match_count')
+            ->values();
+
+        return response()->json($candidates);
+    }
+
+    public function searchCandidates(Request $req)
+    {
+        $keyword = trim((string) $req->query('keyword', ''));
+        $skillIds = $req->query('skill_ids', []);
+        $skillIds = is_array($skillIds) ? $skillIds : [$skillIds];
+        $jobId = $req->query('job_id');
+
+        $skillNames = collect();
+        if (count($skillIds) > 0) {
+            $skillNames = DB::table('jskills')
+                ->whereIn('id', array_filter($skillIds))
+                ->pluck('name')
+                ->map(fn ($name) => strtolower(trim($name)))
+                ->filter()
+                ->values();
+        }
+
+        $requiredSkills = collect();
+        if ($jobId) {
+            $job = Job::with('skills')->where([
+                ['id', '=', $jobId],
+                ['employer_id', '=', Auth::id()],
+            ])->first();
+
+            if ($job) {
+                $requiredSkills = $job->skills
+                    ->pluck('name')
+                    ->map(fn ($name) => strtolower(trim($name)))
+                    ->filter()
+                    ->values();
+            }
+        }
+
+        $candidates = Candidate::query()
+            ->with([
+                'skills' => fn ($query) => $query->whereNull('resume_id'),
+                'educations' => fn ($query) => $query->whereNull('resume_id'),
+                'experiences' => fn ($query) => $query->whereNull('resume_id'),
+                'projects' => fn ($query) => $query->whereNull('resume_id'),
+                'certificates' => fn ($query) => $query->whereNull('resume_id'),
+                'prizes' => fn ($query) => $query->whereNull('resume_id'),
+            ])
+            ->when($keyword !== '', function ($query) use ($keyword) {
+                $like = '%' . strtolower($keyword) . '%';
+                $query->where(function ($subQuery) use ($like) {
+                    $subQuery
+                        ->whereRaw("LOWER(CONCAT(lastname, ' ', firstname)) LIKE ?", [$like])
+                        ->orWhereRaw("LOWER(CONCAT(firstname, ' ', lastname)) LIKE ?", [$like])
+                        ->orWhereRaw('LOWER(email) LIKE ?', [$like])
+                        ->orWhereRaw('LOWER(phone) LIKE ?', [$like])
+                        ->orWhereRaw('LOWER(address) LIKE ?', [$like])
+                        ->orWhereRaw('LOWER(objective) LIKE ?', [$like])
+                        ->orWhereHas('skills', fn ($rel) => $rel->whereRaw('LOWER(name) LIKE ?', [$like]))
+                        ->orWhereHas('educations', fn ($rel) => $rel
+                            ->whereRaw('LOWER(school) LIKE ?', [$like])
+                            ->orWhereRaw('LOWER(major) LIKE ?', [$like]))
+                        ->orWhereHas('experiences', fn ($rel) => $rel
+                            ->whereRaw('LOWER(name) LIKE ?', [$like])
+                            ->orWhereRaw('LOWER(company) LIKE ?', [$like]))
+                        ->orWhereHas('projects', fn ($rel) => $rel
+                            ->whereRaw('LOWER(name) LIKE ?', [$like])
+                            ->orWhereRaw('LOWER(role) LIKE ?', [$like])
+                            ->orWhereRaw('LOWER(technologies) LIKE ?', [$like]));
+                });
+            })
+            ->when($req->query('gender') !== null && $req->query('gender') !== '', function ($query) use ($req) {
+                $query->where('gender', $req->query('gender'));
+            })
+            ->when($req->query('address'), function ($query, $address) {
+                $query->whereRaw('LOWER(address) LIKE ?', ['%' . strtolower($address) . '%']);
+            })
+            ->when($skillNames->isNotEmpty(), function ($query) use ($skillNames) {
+                $query->whereHas('skills', function ($rel) use ($skillNames) {
+                    $rel->whereNull('resume_id')
+                        ->whereIn(DB::raw('LOWER(name)'), $skillNames->toArray());
+                });
+            })
+            ->when($req->query('school'), function ($query, $school) {
+                $query->whereHas('educations', fn ($rel) => $rel
+                    ->whereNull('resume_id')
+                    ->whereRaw('LOWER(school) LIKE ?', ['%' . strtolower($school) . '%']));
+            })
+            ->when($req->query('major'), function ($query, $major) {
+                $query->whereHas('educations', fn ($rel) => $rel
+                    ->whereNull('resume_id')
+                    ->whereRaw('LOWER(major) LIKE ?', ['%' . strtolower($major) . '%']));
+            })
+            ->when($req->query('experience'), function ($query, $experience) {
+                $like = '%' . strtolower($experience) . '%';
+                $query->whereHas('experiences', fn ($rel) => $rel
+                    ->whereNull('resume_id')
+                    ->where(function ($subQuery) use ($like) {
+                        $subQuery->whereRaw('LOWER(name) LIKE ?', [$like])
+                            ->orWhereRaw('LOWER(company) LIKE ?', [$like])
+                            ->orWhereRaw('LOWER(description) LIKE ?', [$like]);
+                    }));
+            })
+            ->when($req->query('project'), function ($query, $project) {
+                $like = '%' . strtolower($project) . '%';
+                $query->whereHas('projects', fn ($rel) => $rel
+                    ->whereNull('resume_id')
+                    ->where(function ($subQuery) use ($like) {
+                        $subQuery->whereRaw('LOWER(name) LIKE ?', [$like])
+                            ->orWhereRaw('LOWER(role) LIKE ?', [$like])
+                            ->orWhereRaw('LOWER(technologies) LIKE ?', [$like])
+                            ->orWhereRaw('LOWER(description) LIKE ?', [$like]);
+                    }));
+            })
+            ->when($req->query('certificate'), function ($query, $certificate) {
+                $query->whereHas('certificates', fn ($rel) => $rel
+                    ->whereNull('resume_id')
+                    ->whereRaw('LOWER(name) LIKE ?', ['%' . strtolower($certificate) . '%']));
+            })
+            ->when($req->query('prize'), function ($query, $prize) {
+                $query->whereHas('prizes', fn ($rel) => $rel
+                    ->whereNull('resume_id')
+                    ->whereRaw('LOWER(name) LIKE ?', ['%' . strtolower($prize) . '%']));
+            })
+            ->when($req->boolean('has_location'), fn ($query) => $query
+                ->whereNotNull('map_lat')
+                ->whereNotNull('map_lng'))
+            ->orderByDesc('updated_at')
+            ->limit(60)
+            ->get()
+            ->map(function ($candidate) use ($requiredSkills) {
+                $candidateSkills = $candidate->skills->pluck('name')->filter()->values();
+                $matchedSkills = $requiredSkills->isEmpty()
+                    ? collect()
+                    : $candidateSkills
+                        ->filter(fn ($name) => $requiredSkills->contains(strtolower(trim($name))))
+                        ->unique()
+                        ->values();
+
+                return [
+                    'id' => $candidate->id,
+                    'firstname' => $candidate->firstname,
+                    'lastname' => $candidate->lastname,
+                    'gender' => $candidate->gender,
+                    'dob' => $candidate->dob,
+                    'phone' => $candidate->phone,
+                    'email' => $candidate->email,
+                    'address' => $candidate->address,
+                    'objective' => $candidate->objective,
+                    'avatar' => $candidate->avatar,
+                    'link' => $candidate->link,
+                    'skills' => $candidateSkills,
+                    'matched_skills' => $matchedSkills,
+                    'match_count' => $matchedSkills->count(),
+                    'match_percent' => $requiredSkills->isEmpty()
+                        ? null
+                        : round(($matchedSkills->count() / max($requiredSkills->count(), 1)) * 100),
+                    'educations' => $candidate->educations,
+                    'experiences' => $candidate->experiences,
+                    'projects' => $candidate->projects,
+                    'certificates' => $candidate->certificates,
+                    'prizes' => $candidate->prizes,
+                ];
+            })
+            ->sortByDesc('match_count')
+            ->values();
+
+        return response()->json($candidates);
+    }
+
+    public function getTalentRecommendations()
+    {
+        $jobs = Job::with('skills')
+            ->where('employer_id', Auth::id())
+            ->where('is_active', 1)
+            ->whereHas('skills')
+            ->orderByDesc('updated_at')
+            ->get();
+
+        if ($jobs->isEmpty()) {
+            return response()->json([]);
+        }
+
+        $candidates = Candidate::with([
+            'skills' => fn ($query) => $query->whereNull('resume_id'),
+            'educations' => fn ($query) => $query->whereNull('resume_id'),
+            'experiences' => fn ($query) => $query->whereNull('resume_id'),
+            'projects' => fn ($query) => $query->whereNull('resume_id'),
+            'certificates' => fn ($query) => $query->whereNull('resume_id'),
+        ])->get();
+
+        $recommendations = collect();
+
+        foreach ($jobs as $job) {
+            $requiredSkills = $job->skills
+                ->pluck('name')
+                ->map(fn ($name) => strtolower(trim($name)))
+                ->filter()
+                ->values();
+
+            if ($requiredSkills->isEmpty()) {
+                continue;
+            }
+
+            foreach ($candidates as $candidate) {
+                $candidateSkills = $candidate->skills->pluck('name')->filter()->values();
+                $matchedSkills = $candidateSkills
+                    ->filter(fn ($name) => $requiredSkills->contains(strtolower(trim($name))))
+                    ->unique()
+                    ->values();
+
+                if ($matchedSkills->isEmpty()) {
+                    continue;
+                }
+
+                $missingSkills = $job->skills
+                    ->pluck('name')
+                    ->filter(fn ($name) => !$matchedSkills->contains($name))
+                    ->values();
+
+                $recommendations->push([
+                    'candidate' => [
+                        'id' => $candidate->id,
+                        'firstname' => $candidate->firstname,
+                        'lastname' => $candidate->lastname,
+                        'gender' => $candidate->gender,
+                        'phone' => $candidate->phone,
+                        'email' => $candidate->email,
+                        'address' => $candidate->address,
+                        'objective' => $candidate->objective,
+                        'avatar' => $candidate->avatar,
+                        'skills' => $candidateSkills,
+                        'educations' => $candidate->educations,
+                        'experiences' => $candidate->experiences,
+                        'projects' => $candidate->projects,
+                        'certificates' => $candidate->certificates,
+                    ],
+                    'job' => [
+                        'id' => $job->id,
+                        'jname' => $job->jname,
+                        'amount' => $job->amount,
+                        'yoe' => $job->yoe,
+                    ],
+                    'required_skills' => $job->skills->pluck('name')->values(),
+                    'matched_skills' => $matchedSkills,
+                    'missing_skills' => $missingSkills,
+                    'match_count' => $matchedSkills->count(),
+                    'match_percent' => round(($matchedSkills->count() / max($requiredSkills->count(), 1)) * 100),
+                ]);
+            }
+        }
+
+        return response()->json(
+            $recommendations
+                ->sortByDesc('match_percent')
+                ->sortByDesc('match_count')
+                ->take(24)
+                ->values()
+        );
+    }
+
+    public function contactCandidate(Request $req)
+    {
+        $req->validate([
+            'candidate_id' => 'required|integer|exists:candidates,id',
+            'job_id' => 'required|integer|exists:jobs,id',
+            'title' => 'required|string|max:255',
+            'content' => 'required|string',
+            'is_send_mail' => 'nullable|boolean',
+        ]);
+
+        $job = Job::where([
+            ['id', '=', $req->job_id],
+            ['employer_id', '=', Auth::id()],
+        ])->firstOrFail();
+
+        $company = Employer::where('user_id', '=', Auth::id())->value('name');
+        $messageName = 'Nhà tuyển dụng ' . ($company ?: '') . ' đã liên hệ bạn về vị trí ' . $job->jname;
+
+        CandidateMessage::create([
+            'candidate_id' => $req->candidate_id,
+            'job_id' => $job->id,
+            'name' => $messageName,
+            'title' => $req->title,
+            'content' => $req->content,
+        ]);
+
+        $candidate = Candidate::find($req->candidate_id);
+        if ($req->boolean('is_send_mail') && $candidate?->email) {
+            Mail::raw($req->content, function ($message) use ($candidate, $req) {
+                $message->to($candidate->email)->subject($req->title);
+            });
+        }
+
+        event(new NotifyCandidateEvent($messageName, $req->candidate_id));
+
+        return response()->json('Sent successfully');
     }
 
     public function processApplying(Request $req)

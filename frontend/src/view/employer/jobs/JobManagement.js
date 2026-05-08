@@ -11,6 +11,7 @@ import jlevelApi from "../../../api/jlevel";
 import industryApi from "../../../api/industry";
 import locationApi from "../../../api/location";
 import employerApi from "../../../api/employer";
+import jskillApi from "../../../api/jskill";
 
 function JobManagement() {
   const [jobs, setJobs] = useState([]);
@@ -19,6 +20,7 @@ function JobManagement() {
   const [jlevels, setJlevels] = useState([]);
   const [industries, setIndustries] = useState([]);
   const [locations, setLocations] = useState([]);
+  const [skills, setSkills] = useState([]);
   const { register, handleSubmit } = useForm();
   const company = useSelector((state) => state.employerAuth.current.employer);
   const isAuth = useSelector((state) => state.employerAuth.isAuth);
@@ -27,6 +29,7 @@ function JobManagement() {
   const getAllJlevels = async () => setJlevels((await jlevelApi.getAll()).inf);
   const getAllIndustries = async () => setIndustries((await industryApi.getAll()).inf);
   const getAllLocations = async () => setLocations(await locationApi.getAll());
+  const getAllSkills = async () => setSkills(await jskillApi.getAll());
 
   const getJobList = async (data) => {
     let searchKey = "";
@@ -49,6 +52,7 @@ function JobManagement() {
     getAllJlevels();
     getAllIndustries();
     getAllLocations();
+    getAllSkills();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -151,12 +155,14 @@ function JobManagement() {
         jlevels={jlevels}
         industries={industries}
         locations={locations}
+        skills={skills}
       />
       <JobCreating
         jtypes={jtypes}
         jlevels={jlevels}
         industries={industries}
         locations={locations}
+        skills={skills}
       />
     </div>
   );

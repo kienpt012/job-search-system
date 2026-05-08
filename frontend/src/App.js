@@ -14,7 +14,9 @@ const AdminLogin = lazy(() => import("./view/admin/Login"));
 const AdminDashboard = lazy(() => import("./view/admin/Dashboard"));
 const AdminJobs = lazy(() => import("./view/admin/Jobs"));
 const AdminAppearance = lazy(() => import("./view/admin/Appearance"));
+const AdminSkills = lazy(() => import("./view/admin/Skills"));
 const CandidateList = lazy(() => import("./view/employer/candidates/CandidateList"));
+const CandidateSearch = lazy(() => import("./view/employer/candidates/CandidateSearch"));
 const JobManagement = lazy(() => import("./view/employer/jobs/JobManagement"));
 const EmployerDashboard = lazy(() => import("./view/employer/dashboard/Dashboard"));
 const CandidateLayout = lazy(() => import("./view/candidate/management/layouts/CandidateLayout"));
@@ -49,6 +51,7 @@ function App() {
                   <Routes>
                     <Route index element={<AdminDashboard />} />
                     <Route path="jobs" element={<AdminJobs />} />
+                    <Route path="skills" element={<AdminSkills />} />
                     <Route path="appearance" element={<AdminAppearance />} />
                   </Routes>
                 </AdminLayout>
@@ -93,6 +96,7 @@ function App() {
                   <Routes>
                     <Route index element={<EmployerDashboard />} />
                     <Route path="candidates" element={<CandidateList />} />
+                    <Route path="candidate-search" element={<CandidateSearch />} />
                     <Route path="jobs" element={<JobManagement />} />
                   </Routes>
                 </EmployerLayout>

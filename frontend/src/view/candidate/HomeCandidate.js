@@ -1,72 +1,23 @@
 import axios from "axios";
 import { useEffect, useState } from "react";
 import {
-  BsArrowUpRight,
+  BsArrowRight,
   BsBriefcase,
-  BsBuildings,
+  BsBuilding,
   BsCaretLeft,
   BsCaretRight,
-  BsCheck2Circle,
   BsCurrencyDollar,
   BsGeoAlt,
+  BsPatchCheck,
   BsPinMapFill,
-  BsPlayCircleFill,
-  BsStars,
+  BsSearch,
 } from "react-icons/bs";
 import { Link, useNavigate } from "react-router-dom";
 import { useSelector } from "react-redux";
 import candidateApi from "../../api/candidate";
 import AppImage from "../../components/AppImage";
+import useRevealOnScroll from "../../hooks/useRevealOnScroll";
 import "./custom.css";
-
-const TEXT = {
-  heroEyebrow: "Nền tảng việc làm rõ ràng hơn",
-  heroTitleLine1: "Tìm việc phù hợp hơn.",
-  heroTitleLine2: "Xem doanh nghiệp rõ ràng hơn.",
-  heroDesc:
-    "Bố cục mới ưu tiên thông tin thật sự quan trọng như vị trí, doanh nghiệp, mức lương và địa điểm để bạn quét nhanh, đọc dễ và ra quyết định gọn hơn.",
-  exploreJobs: "Khám phá việc làm",
-  exploreCompanies: "Xem công ty nổi bật",
-  heroTag1: "Việc làm mới mỗi ngày",
-  heroTag2: "Doanh nghiệp uy tín",
-  heroTag3: "Theo dõi cơ hội rõ ràng",
-  heroFeature1Title: "Tìm việc gọn hơn",
-  heroFeature1Desc: "Danh sách job ưu tiên thông tin quan trọng, không còn rối mắt.",
-  heroFeature2Title: "Lọc nhanh hơn",
-  heroFeature2Desc: "Duyệt theo công ty, khu vực và mức lương trong bố cục dễ quét.",
-  heroFeature3Title: "Tin tuyển dụng sáng hơn",
-  heroFeature3Desc: "Màu sắc, typography và card được đồng bộ để đọc thoải mái hơn.",
-  hotJobs: "Việc làm hot",
-  hotCompanies: "Công ty hot",
-  currentPage: "Trang hiện tại",
-  heroSlideOpen: "Mở nội dung này",
-  heroPanelTitle: "Doanh nghiệp được quan tâm hôm nay",
-  heroPanelDesc:
-    "Slide nổi bật giúp bạn xem nhanh nhà tuyển dụng và vị trí đang có sức hút cao.",
-  featuredJobs: "Việc làm nổi bật",
-  featuredJobsSub:
-    "Các cơ hội được nhà tuyển dụng ưu tiên hiển thị và cập nhật liên tục.",
-  viewAll: "Xem tất cả",
-  salaryDeal: "Theo thỏa thuận",
-  salaryUnit: "triệu VND",
-  nearbyTitlePrefix: "Doanh nghiệp gần nơi ở của bạn (",
-  nearbyTitleSuffix: "km)",
-  nearbySubPrefix: "Gợi ý theo vị trí đã ghim: ",
-  nearbySubFallback:
-    "Hệ thống đang ưu tiên những doanh nghiệp đang tuyển gần khu vực của bạn.",
-  nearbyBadge: "Theo khoảng cách thực tế",
-  nearbyLoading: "Đang tìm các công ty phù hợp gần bạn...",
-  jobsCount: "việc làm",
-  nearbyEmptyPrefix: "Hiện chưa có công ty đang tuyển trong bán kính ",
-  nearbyEmptySuffix: "km quanh nơi ở của bạn.",
-  topCompanies: "Doanh nghiệp nổi bật",
-  topCompaniesSub:
-    "Tập trung vào những công ty đang có nhu cầu tuyển dụng rõ ràng và profile tốt.",
-  companyCatalog: "Xem danh mục",
-  featuredBadge: "Ưu tiên hiển thị",
-  topCompanyBadge: "Doanh nghiệp nổi bật",
-  nearbyBadgeAlt: "Gần khu vực của bạn",
-};
 
 const initialNearbyCompanies = {
   has_location: false,
@@ -164,6 +115,14 @@ function HomeCandidate() {
     return () => window.clearInterval(timer);
   }, [heroSlides.length]);
 
+  useRevealOnScroll([
+    hotJobs.length,
+    hotCompanies.length,
+    nearbyCompanies.data.length,
+    curPage,
+    isCandidateAuth,
+  ]);
+
   const resolvedHeroSlides =
     heroSlides.length > 0
       ? heroSlides
@@ -173,7 +132,7 @@ function HomeCandidate() {
             image: poster,
             target_url: "/jobs",
             is_external: false,
-            target_label: TEXT.exploreJobs,
+            target_label: "Khám phá việc làm",
           },
         ];
 
@@ -181,9 +140,7 @@ function HomeCandidate() {
     resolvedHeroSlides[currentHeroSlide % resolvedHeroSlides.length];
 
   const handleClickHeroSlide = () => {
-    if (!activeHeroSlide?.target_url) {
-      return;
-    }
+    if (!activeHeroSlide?.target_url) return;
 
     if (activeHeroSlide.is_external) {
       window.open(activeHeroSlide.target_url, "_blank", "noopener,noreferrer");
@@ -193,232 +150,213 @@ function HomeCandidate() {
     nav(activeHeroSlide.target_url);
   };
 
+  const getCompanyJobCount = (company) =>
+    company?.job_num ?? company?.jobs_count ?? company?.jobs?.length ?? 0;
+
   return (
-    <div className="page-section">
+    <div className="home-page">
       <section className="hero-panel">
-        <div className="row align-items-stretch g-4">
+        <div className="row align-items-center g-4 g-xl-5">
           <div className="col-lg-6">
-            <div className="hero-copy">
+            <div className="hero-copy reveal" style={{ "--reveal-delay": "0ms" }}>
               <div className="app-pill hero-pill">
-                <BsStars />
-                <span>{TEXT.heroEyebrow}</span>
+                <BsPatchCheck />
+                Nền tảng tuyển dụng chuyên nghiệp
               </div>
               <h1 className="hero-title">
-                {TEXT.heroTitleLine1}
-                <br />
-                {TEXT.heroTitleLine2}
+                Tìm việc phù hợp, kết nối đúng công ty.
               </h1>
-              <p className="hero-copy__desc">{TEXT.heroDesc}</p>
+              <p className="hero-copy__desc">
+                Khám phá cơ hội nổi bật, so sánh doanh nghiệp và ứng tuyển nhanh
+                trong một trải nghiệm rõ ràng, sạch và dễ đọc.
+              </p>
+            </div>
 
-              <div className="hero-actions">
-                <Link to="/jobs" className="btn app-button-primary px-4 py-3">
-                  {TEXT.exploreJobs}
-                </Link>
-                <Link to="/companies" className="btn hero-secondary-button px-4 py-3">
-                  {TEXT.exploreCompanies}
-                </Link>
+            <div
+              className="hero-actions reveal"
+              style={{ "--reveal-delay": "130ms" }}
+            >
+              <Link to="/jobs" className="btn app-button-primary hero-main-cta">
+                <BsSearch />
+                Khám phá việc làm
+              </Link>
+              <Link to="/companies" className="btn hero-secondary-button">
+                Xem công ty nổi bật
+                <BsArrowRight />
+              </Link>
+            </div>
+
+            <div className="hero-stats">
+              <div className="metric-card reveal" style={{ "--reveal-delay": "220ms" }}>
+                <span className="metric-card__icon">
+                  <BsBriefcase />
+                </span>
+                <div>
+                  <div className="metric-card__label">Việc làm nổi bật</div>
+                  <div className="metric-card__value">{hotJobs.length}+</div>
+                </div>
               </div>
-
-              <div className="hero-tags">
-                <span className="app-soft-badge">{TEXT.heroTag1}</span>
-                <span className="app-soft-badge">{TEXT.heroTag2}</span>
-                <span className="app-soft-badge">{TEXT.heroTag3}</span>
+              <div className="metric-card reveal" style={{ "--reveal-delay": "300ms" }}>
+                <span className="metric-card__icon">
+                  <BsBuilding />
+                </span>
+                <div>
+                  <div className="metric-card__label">Công ty đang tuyển</div>
+                  <div className="metric-card__value">{hotCompanies.length}+</div>
+                </div>
+              </div>
+              <div className="metric-card reveal" style={{ "--reveal-delay": "380ms" }}>
+                <span className="metric-card__icon">
+                  <BsPatchCheck />
+                </span>
+                <div>
+                  <div className="metric-card__label">Danh sách trang</div>
+                  <div className="metric-card__value">0{curPage}</div>
+                </div>
               </div>
             </div>
           </div>
 
           <div className="col-lg-6">
-            <div className="hero-preview">
-              <div className="hero-preview__head">
+            <button
+              type="button"
+              className="hero-panel__media reveal reveal-scale"
+              style={{ "--reveal-delay": "420ms" }}
+              onClick={handleClickHeroSlide}
+              disabled={!activeHeroSlide?.target_url}
+            >
+              <AppImage src={activeHeroSlide?.image} alt="hero_slide" priority />
+              <div className="hero-floating-card">
+                <span className="hero-floating-card__icon">
+                  <BsBriefcase />
+                </span>
                 <div>
-                  <div className="hero-preview__title">{TEXT.heroPanelTitle}</div>
-                  <div className="hero-preview__desc">{TEXT.heroPanelDesc}</div>
-                </div>
-                <button
-                  type="button"
-                  className="hero-preview__action"
-                  onClick={handleClickHeroSlide}
-                  disabled={!activeHeroSlide?.target_url}
-                >
-                  <BsArrowUpRight />
-                </button>
-              </div>
-
-              <button
-                type="button"
-                className="hero-slider"
-                onClick={handleClickHeroSlide}
-                disabled={!activeHeroSlide?.target_url}
-              >
-                <AppImage src={activeHeroSlide?.image} alt="hero_slide" priority />
-                <div className="hero-slider__overlay" />
-                <div className="hero-slider__badge">
-                  <BsPlayCircleFill />
-                  <span>{activeHeroSlide?.target_label || TEXT.heroSlideOpen}</span>
-                </div>
-                <div className="hero-slider__dots">
-                  {resolvedHeroSlides.map((slide, index) => (
-                    <span
-                      key={`hero_slide_dot_${slide.id}_${index}`}
-                      className={`hero-slider__dot ${
-                        index === currentHeroSlide % resolvedHeroSlides.length
-                          ? "is-active"
-                          : ""
-                      }`}
-                    />
-                  ))}
-                </div>
-              </button>
-
-              <div className="hero-stats">
-                <div className="metric-card">
-                  <div className="metric-card__icon">
-                    <BsBriefcase />
-                  </div>
-                  <div>
-                    <div className="metric-card__label">{TEXT.hotJobs}</div>
-                    <div className="metric-card__value">{hotJobs.length}+</div>
-                  </div>
-                </div>
-                <div className="metric-card">
-                  <div className="metric-card__icon">
-                    <BsBuildings />
-                  </div>
-                  <div>
-                    <div className="metric-card__label">{TEXT.hotCompanies}</div>
-                    <div className="metric-card__value">{hotCompanies.length}+</div>
-                  </div>
-                </div>
-                <div className="metric-card">
-                  <div className="metric-card__icon">
-                    <BsStars />
-                  </div>
-                  <div>
-                    <div className="metric-card__label">{TEXT.currentPage}</div>
-                    <div className="metric-card__value">0{curPage}</div>
-                  </div>
+                  <strong>
+                    {activeHeroSlide?.target_label || "Việc làm mới mỗi ngày"}
+                  </strong>
+                  <span>Lọc nhanh theo lương, địa điểm và công ty.</span>
                 </div>
               </div>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section className="feature-strip">
+        {[
+          ["Tìm kiếm nhanh", "Duyệt job nổi bật với thông tin cần thiết ngay trên card."],
+          ["Công ty rõ ràng", "Logo, tên công ty và số lượng việc làm được trình bày gọn."],
+          ["Ứng tuyển dễ hơn", "CTA nhất quán giúp người dùng đi tới trang chi tiết nhanh."],
+        ].map(([title, desc], index) => (
+          <div
+            className="feature-card reveal"
+            key={title}
+            style={{ "--reveal-delay": `${index * 100}ms` }}
+          >
+            <span className="feature-card__icon">
+              {index === 0 ? <BsSearch /> : index === 1 ? <BsBuilding /> : <BsPatchCheck />}
+            </span>
+            <div>
+              <strong>{title}</strong>
+              <p>{desc}</p>
             </div>
           </div>
-        </div>
+        ))}
       </section>
 
-      <section className="hero-feature-grid">
-        <div className="hero-feature-card">
-          <div className="hero-feature-card__icon">
-            <BsBriefcase />
-          </div>
-          <div>
-            <strong>{TEXT.heroFeature1Title}</strong>
-            <p>{TEXT.heroFeature1Desc}</p>
-          </div>
-        </div>
-        <div className="hero-feature-card">
-          <div className="hero-feature-card__icon">
-            <BsCheck2Circle />
-          </div>
-          <div>
-            <strong>{TEXT.heroFeature2Title}</strong>
-            <p>{TEXT.heroFeature2Desc}</p>
-          </div>
-        </div>
-        <div className="hero-feature-card">
-          <div className="hero-feature-card__icon">
-            <BsBuildings />
-          </div>
-          <div>
-            <strong>{TEXT.heroFeature3Title}</strong>
-            <p>{TEXT.heroFeature3Desc}</p>
-          </div>
-        </div>
-      </section>
-
-      <section className="section-card section-card--soft mt-4">
+      <section className="section-card section-card--jobs reveal">
         <div className="section-card__head">
           <div>
-            <div className="app-soft-badge mb-2">{TEXT.featuredBadge}</div>
-            <h2 className="app-section-title mb-1">{TEXT.featuredJobs}</h2>
-            <div className="app-section-subtitle">{TEXT.featuredJobsSub}</div>
+            <h2 className="app-section-title mb-1">Việc làm nổi bật</h2>
+            <div className="app-section-subtitle">
+              Các cơ hội đang được nhà tuyển dụng ưu tiên hiển thị.
+            </div>
           </div>
-          <Link to="/jobs" className="app-soft-badge text-decoration-none section-head-link">
-            {TEXT.viewAll}
+          <Link to="/jobs" className="app-soft-badge text-decoration-none">
+            Xem tất cả
+            <BsArrowRight />
           </Link>
         </div>
-        <div className="row g-4">
+
+        <div className="row g-3">
           {hotJobs.map((job, index) => (
             <div key={"job" + job.id} className="col-xl-6">
-              <div className="job-feature-card" style={{ animationDelay: `${index * 90}ms` }}>
-                <div className="job-feature-card__glow" />
-                <div className="d-flex gap-3 align-items-start">
-                  <Link to={`/companies/${job.employer.id}`} className="text-decoration-none">
-                    <div className="logo-frame logo-frame--elevated">
-                      <AppImage
-                        className="align-self-center"
-                        src={job.employer.logo}
-                        fallbackVariant="logo"
-                        alt={"hotjob" + job.id}
-                      />
-                    </div>
-                  </Link>
-                  <div className="flex-fill min-w-0">
-                    <div className="job-feature-card__topline">
-                      <span className="app-soft-badge">{TEXT.featuredBadge}</span>
-                    </div>
-                    <Link
-                      to={`/jobs/${job.id}`}
-                      className="nav-link fw-bold text-dark mb-2 job-feature-card__title text-multiline-2"
-                    >
+              <div
+                className="job-feature-card reveal"
+                style={{ "--reveal-delay": `${index * 90}ms` }}
+              >
+                <Link
+                  to={`/companies/${job.employer.id}`}
+                  className="logo-frame job-logo text-decoration-none"
+                  aria-label={job.employer.name}
+                >
+                  <AppImage
+                    src={job.employer.logo}
+                    fallbackVariant="logo"
+                    alt={"hotjob" + job.id}
+                  />
+                </Link>
+                <div className="job-card__content">
+                  <div className="job-card__topline">
+                    <Link to={`/jobs/${job.id}`} className="job-feature-card__title">
                       {job.jname}
                     </Link>
-                    <div className="text-secondary mb-2 job-feature-card__company text-multiline-1">
-                      {job.employer.name}
-                    </div>
-                    <div className="d-flex align-items-center gap-2 mb-2">
-                      <BsCurrencyDollar className="text-main" />
+                    <span className="job-priority">Hot</span>
+                  </div>
+                  <Link
+                    to={`/companies/${job.employer.id}`}
+                    className="job-feature-card__company"
+                  >
+                    {job.employer.name}
+                  </Link>
+                  <div className="job-card__meta">
+                    <span>
+                      <BsCurrencyDollar />
                       {job.min_salary ? (
-                        <span>
-                          {job.min_salary} - {job.max_salary} {TEXT.salaryUnit}
-                        </span>
+                        <>
+                          {job.min_salary} - {job.max_salary} triệu VND
+                        </>
                       ) : (
-                        TEXT.salaryDeal
+                        "Theo thỏa thuận"
                       )}
-                    </div>
-                    <div className="d-flex align-items-center gap-2 text-secondary">
-                      <BsGeoAlt className="text-main" />
-                      <span className="text-multiline-1">
-                        {job.locations.map((item, locationIndex) => (
-                          <span key={"job_location_" + job.id + "-" + item.id}>
-                            {item.name}
-                            {locationIndex !== job.locations.length - 1 && ", "}
-                          </span>
-                        ))}
-                      </span>
-                    </div>
+                    </span>
+                    <span>
+                      <BsGeoAlt />
+                      {job.locations.map((item, locationIndex) => (
+                        <span key={"job_location_" + job.id + "-" + item.id}>
+                          {item.name}
+                          {locationIndex !== job.locations.length - 1 && ", "}
+                        </span>
+                      ))}
+                    </span>
                   </div>
                 </div>
+                <Link to={`/jobs/${job.id}`} className="job-card__action">
+                  Chi tiết
+                  <BsArrowRight />
+                </Link>
               </div>
             </div>
           ))}
         </div>
-        <div className="d-flex justify-content-center mt-4">
+
+        <div className="home-pagination">
           {page.links.map((item) => (
             <button
               key={"page" + item.label}
               type="button"
-              className="btn btn-sm border me-2 rounded-pill px-3 py-2 home-page-nav"
-              style={{
-                backgroundColor:
-                  curPage.toString() === item.label ? "var(--app-primary)" : "#fff",
-                color:
-                  curPage.toString() === item.label ? "white" : "var(--app-primary)",
-              }}
+              className={
+                curPage.toString() === item.label
+                  ? "home-page-nav is-active"
+                  : "home-page-nav"
+              }
               onClick={() => item.url && getHotJobs(item.url)}
               disabled={!item.url}
             >
               {item.label === "&laquo; Previous" && <BsCaretLeft />}
               {item.label === "Next &raquo;" && <BsCaretRight />}
-              {item.label !== "&laquo; Previous" && item.label !== "Next &raquo;"
+              {item.label !== "&laquo; Previous" &&
+              item.label !== "Next &raquo;"
                 ? item.label
                 : null}
             </button>
@@ -427,117 +365,97 @@ function HomeCandidate() {
       </section>
 
       {isCandidateAuth && nearbyCompanies.has_location && (
-        <section className="section-card section-card--accent mt-4">
+        <section className="section-card section-card--nearby reveal">
           <div className="section-card__head">
             <div>
-              <div className="app-soft-badge mb-2">{TEXT.nearbyBadgeAlt}</div>
               <h2 className="app-section-title mb-1">
-                {TEXT.nearbyTitlePrefix}
-                {nearbyCompanies.distance_limit_km}
-                {TEXT.nearbyTitleSuffix}
+                Công ty gần bạn ({nearbyCompanies.distance_limit_km} km)
               </h2>
               <div className="app-section-subtitle">
                 {nearbyCompanies.candidate_address
-                  ? `${TEXT.nearbySubPrefix}${nearbyCompanies.candidate_address}`
-                  : TEXT.nearbySubFallback}
+                  ? `Gợi ý theo vị trí đã ghim: ${nearbyCompanies.candidate_address}`
+                  : "Hệ thống đang ưu tiên các công ty đang tuyển gần khu vực của bạn."}
               </div>
             </div>
-            <span className="app-soft-badge">{TEXT.nearbyBadge}</span>
+            <span className="app-soft-badge">
+              <BsPinMapFill />
+              Theo khoảng cách thực tế
+            </span>
           </div>
+
           {isLoadingNearbyCompanies ? (
-            <div className="text-secondary">{TEXT.nearbyLoading}</div>
+            <div className="text-secondary">
+              Đang tìm các công ty phù hợp gần bạn...
+            </div>
           ) : nearbyCompanies.data.length > 0 ? (
-            <div className="row g-4">
+            <div className="row g-3">
               {nearbyCompanies.data.map((company, index) => (
-                <div className="col-md-6 col-xl-3" key={"nearby_company" + company.id}>
-                  <div
-                    className="company-feature-card company-feature-card--highlight"
-                    style={{ animationDelay: `${index * 90}ms` }}
+                <div className="col-sm-6 col-xl-3" key={"nearby_company" + company.id}>
+                  <Link
+                    to={`/companies/${company.id}`}
+                    className="company-feature-card reveal text-decoration-none"
+                    style={{ "--reveal-delay": `${index * 90}ms` }}
                   >
-                    <Link
-                      to={`/companies/${company.id}`}
-                      className="text-decoration-none text-dark"
-                    >
-                      <div className="logo-frame mx-auto mb-3 logo-frame--elevated">
-                        <AppImage
-                          className="align-self-center"
-                          src={company.logo}
-                          fallbackVariant="logo"
-                          alt={"nearby_company_" + company.id}
-                        />
-                      </div>
-                      <div className="text-center fw-bold mb-2 text-multiline-2">
-                        {company.name}
-                      </div>
-                      <div className="text-center text-secondary small mb-3 text-multiline">
-                        {company.address}
-                      </div>
-                      <div className="d-flex justify-content-center flex-wrap gap-2">
-                        <span className="app-soft-badge">{company.distance_km} km</span>
-                        <span className="app-soft-badge">
-                          <BsPinMapFill className="me-1" />
-                          {company.job_num} {TEXT.jobsCount}
-                        </span>
-                      </div>
-                    </Link>
-                  </div>
+                    <div className="logo-frame company-logo">
+                      <AppImage
+                        src={company.logo}
+                        fallbackVariant="logo"
+                        alt={"nearby_company_" + company.id}
+                      />
+                    </div>
+                    <div className="company-card__name">{company.name}</div>
+                    <div className="company-card__meta">
+                      <BsPinMapFill />
+                      <span>{company.distance_km} km</span>
+                    </div>
+                  </Link>
                 </div>
               ))}
             </div>
           ) : (
             <div className="text-secondary">
-              {TEXT.nearbyEmptyPrefix}
-              {nearbyCompanies.distance_limit_km}
-              {TEXT.nearbyEmptySuffix}
+              Hiện chưa có công ty đang tuyển trong bán kính{" "}
+              {nearbyCompanies.distance_limit_km} km quanh nơi ở của bạn.
             </div>
           )}
         </section>
       )}
 
-      <section className="section-card section-card--soft mt-4 mb-4">
+      <section className="section-card section-card--companies mb-4 reveal">
         <div className="section-card__head">
           <div>
-            <div className="app-soft-badge mb-2">{TEXT.topCompanyBadge}</div>
-            <h2 className="app-section-title mb-1">{TEXT.topCompanies}</h2>
-            <div className="app-section-subtitle">{TEXT.topCompaniesSub}</div>
+            <h2 className="app-section-title mb-1">Top công ty nổi bật</h2>
+            <div className="app-section-subtitle">
+              Chọn doanh nghiệp phù hợp và xem nhanh các vị trí đang tuyển.
+            </div>
           </div>
-          <Link
-            to="/companies"
-            className="app-soft-badge text-decoration-none section-head-link"
-          >
-            {TEXT.companyCatalog}
+          <Link to="/companies" className="app-soft-badge text-decoration-none">
+            Xem danh mục
+            <BsArrowRight />
           </Link>
         </div>
-        <div className="row g-4">
+
+        <div className="row g-3">
           {hotCompanies.map((company, index) => (
-            <div className="col-md-6 col-xl-3" key={"company" + company.id}>
-              <div
-                className="company-feature-card company-feature-card--grid"
-                style={{ animationDelay: `${index * 100}ms` }}
+            <div className="col-sm-6 col-xl-3" key={"company" + company.id}>
+              <Link
+                to={`/companies/${company.id}`}
+                className="company-feature-card reveal text-decoration-none"
+                style={{ "--reveal-delay": `${index * 90}ms` }}
               >
-                <Link
-                  to={`/companies/${company.id}`}
-                  className="text-decoration-none text-dark"
-                >
-                  <div className="company-feature-card__ring" />
-                  <div className="logo-frame mx-auto mb-3 logo-frame--elevated">
-                    <AppImage
-                      className="align-self-center"
-                      src={company.logo}
-                      fallbackVariant="logo"
-                      alt={"hot_company" + company.id}
-                    />
-                  </div>
-                  <div className="text-center fw-bold mb-2 text-multiline-2">
-                    {company.name}
-                  </div>
-                  <div className="text-center">
-                    <span className="app-soft-badge">
-                      {company.job_num} {TEXT.jobsCount}
-                    </span>
-                  </div>
-                </Link>
-              </div>
+                <div className="logo-frame company-logo">
+                  <AppImage
+                    src={company.logo}
+                    fallbackVariant="logo"
+                    alt={"hot_company" + company.id}
+                  />
+                </div>
+                <div className="company-card__name">{company.name}</div>
+                <div className="company-card__meta">
+                  <BsBriefcase />
+                  <span>{getCompanyJobCount(company)} việc làm</span>
+                </div>
+              </Link>
             </div>
           ))}
         </div>

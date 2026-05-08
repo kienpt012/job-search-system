@@ -23,6 +23,10 @@ class Job extends Model
     {
         return $this->belongsToMany(Industry::class, 'job_industry');
     }
+    public function skills()
+    {
+        return $this->belongsToMany(Jskill::class, 'job_skill', 'job_id', 'skill_id');
+    }
     public function jtype()
     {
         return $this->belongsTo(Jtype::class);

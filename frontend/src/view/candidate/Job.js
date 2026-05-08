@@ -3,13 +3,16 @@ import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { AiFillHeart, AiOutlineHeart, AiOutlinePlus } from "react-icons/ai";
 import {
+  BsBoxArrowUpRight,
   BsCalendar2Check,
   BsCalendarEvent,
   BsFillBriefcaseFill,
   BsFillGeoAltFill,
   BsFillPeopleFill,
   BsFillPersonFill,
+  BsGlobe2,
   BsPersonWorkspace,
+  BsShare,
   BsUpload,
 } from "react-icons/bs";
 import { FaIndustry } from "react-icons/fa";
@@ -505,6 +508,47 @@ function Job() {
   const companyMapEmbedUrl = buildMapEmbedUrl(job.employer?.map_lat, job.employer?.map_lng);
   const companyMapExternalUrl = buildMapExternalUrl(job.employer?.map_lat, job.employer?.map_lng);
   const companyGoogleMapsUrl = buildGoogleMapsUrl(job.employer?.map_lat, job.employer?.map_lng);
+  const salaryText = job.min_salary
+    ? `${job.min_salary} - ${job.max_salary} triệu VND`
+    : "Cạnh tranh";
+  const companySizeText = job.employer?.min_employees
+    ? `${job.employer.min_employees}${
+        job.employer.max_employees !== 0 ? ` - ${job.employer.max_employees}` : "+"
+      } nhân viên`
+    : "Chưa cập nhật";
+  const deadlineText = job.expire_at
+    ? dayjs(job.expire_at).format("DD/MM/YYYY")
+    : "Đang tuyển";
+  const daysLeft = job.expire_at ? dayjs(job.expire_at).diff(new Date(), "day") : null;
+  const descriptionBlocks = String(job.description || "")
+    .split(/\n\s*\n/g)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const descriptionIntro = descriptionBlocks[0] || "Chưa cập nhật thông tin";
+  const descriptionSections = [
+    {
+      title: "Overview",
+      content: descriptionBlocks.slice(0, 2),
+    },
+    {
+      title: "Responsibilities",
+      content: descriptionBlocks.slice(2, 6),
+    },
+    {
+      title: "Requirements",
+      content: descriptionBlocks.slice(6, 10),
+    },
+    {
+      title: "Benefits",
+      content: descriptionBlocks.slice(10),
+    },
+  ].filter((section) => section.content.length > 0);
+  const skillTags = [
+    ...(industries || []).map((item) => item.name),
+    job.jlevel?.name,
+    job.jtype?.name,
+    job.yoe ? `${job.yoe}+ năm kinh nghiệm` : "Entry friendly",
+  ].filter(Boolean);
 
   useEffect(() => {
     if (isAuth) {
@@ -516,7 +560,260 @@ function Job() {
   }, [isAuth]);
 
   return (
-    <div className="job-layout">
+    <div className="job-detail-page">
+      <section className="job-detail-hero">
+        <div className="job-detail-hero__main">
+          <div className="job-detail-logo">
+            <AppImage
+              src={job.employer.logo}
+              fallbackVariant="logo"
+              alt={job.employer.name}
+            />
+          </div>
+          <div className="job-detail-title-block">
+            <div className="job-detail-eyebrow">
+              <BsFillBriefcaseFill />
+              Tuyển dụng nổi bật
+            </div>
+            <h1>{job.jname}</h1>
+            <div className="job-detail-company">{job.employer.name}</div>
+            <div className="job-detail-meta-line">
+              <span>
+                <BsFillGeoAltFill />
+                {job.address || job.employer.address || "Linh hoạt"}
+              </span>
+              <span>
+                <MdOutlineAttachMoney />
+                {salaryText}
+              </span>
+              <span>
+                <BsCalendar2Check />
+                Hạn nộp {deadlineText}
+              </span>
+            </div>
+            <div className="job-detail-badges">
+              {industries.slice(0, 3).map((item) => (
+                <span key={"hero_industry_" + item.id}>{item.name}</span>
+              ))}
+              <span>{job.jtype?.name || "Full-time"}</span>
+              <span>{job.jlevel?.name || "Professional"}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="job-detail-hero__actions">
+          <button
+            className="job-detail-apply-btn"
+            data-bs-toggle={isAuth ? "modal" : ""}
+            data-bs-target={isAuth ? "#applying_dialog" : ""}
+            disabled={isApplied === true}
+            onClick={() => {
+              if (isAuth) {
+                setIsUpload(false);
+                setFile(undefined);
+                getResumes();
+              } else {
+                checkLoggedIn();
+              }
+            }}
+          >
+            {isApplied === true ? "Đã ứng tuyển" : "Ứng tuyển ngay"}
+          </button>
+          <div className="job-detail-secondary-actions">
+            <button type="button" onClick={() => handleClickSaveBtn(!isSaved)}>
+              {!isSaved ? <AiOutlineHeart /> : <AiFillHeart />}
+              {isSaved ? "Đã lưu" : "Lưu"}
+            </button>
+            <button type="button">
+              <BsShare />
+              Chia sẻ
+            </button>
+          </div>
+          <div className="job-detail-action-meta">
+            <span>Đăng ngày {job.created_at ? dayjs(job.created_at).format("DD/MM/YYYY") : "--"}</span>
+            <span>{daysLeft !== null && daysLeft > 0 ? `${daysLeft} ngày còn lại` : "Đang tuyển"}</span>
+          </div>
+        </div>
+      </section>
+
+      <div className="job-detail-layout">
+        <main className="job-detail-main">
+          <section className="job-detail-card">
+            <div className="job-detail-section-head">
+              <h2>Thông tin công việc</h2>
+              <p>Các thông tin quan trọng để đánh giá nhanh độ phù hợp.</p>
+            </div>
+            <div className="job-detail-info-grid">
+              {[
+                ["Ngành nghề", industries.map((item) => item.name).join(", ") || "Chưa cập nhật", <FaIndustry />],
+                ["Lương", salaryText, <MdOutlineAttachMoney />],
+                ["Kinh nghiệm", job.yoe ? `${job.yoe} năm` : "Không yêu cầu", <BsFillBriefcaseFill />],
+                ["Số lượng", `${job.amount || 1} người`, <BsFillPeopleFill />],
+                ["Hình thức", job.jtype?.name || "Chưa cập nhật", <BsPersonWorkspace />],
+                ["Cấp bậc", job.jlevel?.name || "Chưa cập nhật", <BsFillPersonFill />],
+                ["Ngày đăng", job.created_at ? dayjs(job.created_at).format("DD/MM/YYYY") : "--", <BsCalendarEvent />],
+                ["Hạn nộp", deadlineText, <BsCalendar2Check />],
+              ].map(([label, value, icon]) => (
+                <div className="job-detail-info-card" key={label}>
+                  <span>{icon}</span>
+                  <div>
+                    <small>{label}</small>
+                    <strong>{value}</strong>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="job-detail-card">
+            <div className="job-detail-section-head">
+              <h2>Chi tiết công việc</h2>
+              <p>{descriptionIntro}</p>
+            </div>
+            <div className="job-description-blocks">
+              {descriptionSections.map((section) => (
+                <section className="job-description-section" key={section.title}>
+                  <h3>{section.title}</h3>
+                  {section.content.map((paragraph, index) => (
+                    <p key={`${section.title}_${index}`}>{paragraph}</p>
+                  ))}
+                </section>
+              ))}
+            </div>
+          </section>
+
+          <section className="job-detail-card">
+            <div className="job-detail-section-head">
+              <h2>Kỹ năng & lĩnh vực liên quan</h2>
+              <p>Các tín hiệu giúp bạn đánh giá nhanh yêu cầu chính của vị trí.</p>
+            </div>
+            <div className="job-skill-tags">
+              {skillTags.map((item) => (
+                <span key={item}>{item}</span>
+              ))}
+            </div>
+          </section>
+
+          <section className="job-detail-related">
+            <div className="job-detail-section-head">
+              <h2>Việc làm tương tự</h2>
+              <p>Các cơ hội liên quan từ cùng doanh nghiệp hoặc cùng nhóm kỹ năng.</p>
+            </div>
+            <div className="related-job-card">
+              <div className="job-detail-logo job-detail-logo--sm">
+                <AppImage
+                  src={job.employer.logo}
+                  fallbackVariant="logo"
+                  alt={job.employer.name}
+                />
+              </div>
+              <div>
+                <strong>{job.jname}</strong>
+                <span>{salaryText} • {job.address || "Linh hoạt"}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+              >
+                Xem nhanh
+              </button>
+            </div>
+          </section>
+        </main>
+
+        <aside className="job-detail-sidebar">
+          <div className="job-company-card">
+            <div className="job-detail-logo job-detail-logo--company">
+              <AppImage
+                src={job.employer.logo}
+                fallbackVariant="logo"
+                alt={job.employer.name}
+              />
+            </div>
+            <h3>{job.employer.name}</h3>
+            <div className="job-company-facts">
+              <div>
+                <IoMdPeople />
+                <span>{companySizeText}</span>
+              </div>
+              <div>
+                <FaIndustry />
+                <span>{industries[0]?.name || "Đa lĩnh vực"}</span>
+              </div>
+              <div>
+                <BsFillGeoAltFill />
+                <span>{job.employer.address || job.address || "Chưa cập nhật"}</span>
+              </div>
+              {job.employer.website && (
+                <div>
+                  <BsGlobe2 />
+                  <a href={job.employer.website} target="_blank" rel="noreferrer">
+                    Website
+                  </a>
+                </div>
+              )}
+            </div>
+            <div className="job-company-stats">
+              <div>
+                <strong>{job.amount || 1}</strong>
+                <span>Vị trí</span>
+              </div>
+              <div>
+                <strong>{job.yoe || 0}+</strong>
+                <span>Năm KN</span>
+              </div>
+            </div>
+            {hasMapLocation(job.employer) && (
+              <div className="job-sidebar-map-actions">
+                <button
+                  type="button"
+                  className="job-sidebar-button job-sidebar-button--ghost"
+                  onClick={() => setShowCompanyMap(true)}
+                >
+                  Xem vị trí công ty
+                </button>
+                {companyGoogleMapsUrl && (
+                  <a
+                    href={companyGoogleMapsUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="job-sidebar-button job-sidebar-button--ghost"
+                  >
+                    Xem qua Google Maps <BsBoxArrowUpRight />
+                  </a>
+                )}
+              </div>
+            )}
+            <button
+              type="button"
+              className="job-sidebar-button job-sidebar-button--primary"
+              onClick={() => nav(`/companies/${job.employer.id}`)}
+            >
+              View company profile
+            </button>
+          </div>
+        </aside>
+      </div>
+
+      <div className="job-mobile-apply">
+        <button
+          type="button"
+          data-bs-toggle={isAuth ? "modal" : ""}
+          data-bs-target={isAuth ? "#applying_dialog" : ""}
+          disabled={isApplied === true}
+          onClick={() => {
+            if (isAuth) {
+              setIsUpload(false);
+              setFile(undefined);
+              getResumes();
+            } else {
+              checkLoggedIn();
+            }
+          }}
+        >
+          {isApplied === true ? "Đã ứng tuyển" : "Ứng tuyển ngay"}
+        </button>
+      </div>
       <div className="job-cover">
         <AppImage
           src={job.employer.image}
@@ -745,7 +1042,7 @@ function Job() {
                       rel="noreferrer"
                       className="btn btn-outline-dark btn-sm container-fluid mt-2"
                     >
-                      Xem trên Google Maps
+                      Xem qua Google Maps
                     </a>
                   </>
                 )}
@@ -961,7 +1258,7 @@ function Job() {
                 rel="noreferrer"
                 className="btn btn-outline-dark"
               >
-                Xem trên Google Maps
+                Xem qua Google Maps
               </a>
             )}
           </Modal.Footer>

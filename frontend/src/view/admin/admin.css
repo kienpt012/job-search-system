@@ -522,6 +522,7 @@
 }
 
 .system-jobs-filter select,
+.system-jobs-filter input,
 .system-search-field input {
   border: 1px solid #d8e1ea;
   border-radius: 16px;

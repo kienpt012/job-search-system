@@ -2,7 +2,7 @@ import { useForm } from "react-hook-form";
 import { AiOutlineLine } from "react-icons/ai";
 import jobApi from "../../../api/job";
 
-function JobCreating({ jtypes, jlevels, industries, locations }) {
+function JobCreating({ jtypes, jlevels, industries, locations, skills }) {
   const {
     register,
     formState: { errors },
@@ -17,6 +17,11 @@ function JobCreating({ jtypes, jlevels, industries, locations }) {
     }
     for (let j = 0; j < job_inf.locations.length; j++) {
       job_inf.locations[j] = locations[job_inf.locations[j]].id;
+    }
+    if (job_inf.skills) {
+      for (let j = 0; j < job_inf.skills.length; j++) {
+        job_inf.skills[j] = skills[job_inf.skills[j]].id;
+      }
     }
     delete job_inf.salaryOpt;
     if (job_inf.yoe === "") delete job_inf.yoe;
@@ -100,6 +105,37 @@ function JobCreating({ jtypes, jlevels, industries, locations }) {
                     </option>
                   ))}
                 </select>
+              </div>
+              <div className="mt-2">
+                <strong>Kỹ năng yêu cầu:</strong>
+                <div className="d-flex mt-2">
+                  <span>Chọn:</span>
+                  <select
+                    className="form-select w-25 ms-2"
+                    multiple
+                    size="6"
+                    {...register("skills")}
+                  >
+                    {skills.map((item, index) => (
+                      <option value={index} key={"skill" + item.id}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {watch("skills") && watch("skills").length > 0 ? (
+                  <div
+                    className="form-control disabled-field mt-2"
+                    style={{ width: "50%" }}
+                  >
+                    {watch("skills").map((item, index) => (
+                      <span key={"cur_skill" + item}>
+                        {skills[item].name}
+                        {index !== watch("skills").length - 1 && ", "}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
               </div>
               {errors.jtype_id && (
                 <span className="text-danger">Vui lòng chọn 1 lựa chọn</span>

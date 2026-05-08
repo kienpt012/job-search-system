@@ -14,6 +14,7 @@ use App\Http\Controllers\ExperienceController;
 use App\Http\Controllers\HeroSlideController;
 use App\Http\Controllers\IndustryController;
 use App\Http\Controllers\JlevelController;
+use App\Http\Controllers\JskillController;
 use App\Http\Controllers\JobController;
 use App\Http\Controllers\JtypeController;
 use App\Http\Controllers\LocationController;
@@ -60,6 +61,10 @@ Route::controller(EmployerController::class)->prefix('companies')->group(functio
     Route::get('{id}/getComJobs', 'getComJobs');
     Route::get('{id}/getJobList', 'getJobList');
     Route::get('getCandidateList', 'getCandidateList')->middleware('jwt');
+    Route::get('searchCandidates', 'searchCandidates')->middleware('jwt');
+    Route::get('talentRecommendations', 'getTalentRecommendations')->middleware('jwt');
+    Route::get('jobs/{job_id}/recommendedCandidates', 'getRecommendedCandidates')->middleware('jwt');
+    Route::post('contactCandidate', 'contactCandidate')->middleware('jwt');
     Route::post('processApplying', 'processApplying')->middleware('jwt');
     Route::post('{job_id}/changeJobStatus', 'changeJobStatus');
 });
@@ -75,6 +80,13 @@ Route::controller(AdminController::class)->prefix('admin')->middleware('jwt')->g
     Route::post('users/{id}/status', 'toggleUserStatus');
     Route::post('users/{id}/password', 'updateUserPassword');
     Route::delete('users/{id}', 'destroyUser');
+});
+
+Route::controller(JskillController::class)->prefix('jskills')->group(function () {
+    Route::get('', 'index');
+    Route::post('', 'store')->middleware('jwt');
+    Route::patch('{id}', 'update')->middleware('jwt');
+    Route::delete('{id}', 'destroy')->middleware('jwt');
 });
 
 Route::controller(HeroSlideController::class)->prefix('admin/hero-slides')->middleware('jwt')->group(function () {
@@ -96,6 +108,7 @@ Route::controller(JobController::class)->prefix('jobs')->group(function () {
     Route::post('', 'create');
     Route::post('{id}/update', 'update');
     Route::get('{id}/getJobIndustries', 'getJobIndustries');
+    Route::get('{id}/getJobSkills', 'getJobSkills');
     Route::post('{id}/apply', 'apply')->middleware('jwt');
     Route::get('{id}/checkApplying', 'checkApplying')->middleware('jwt');
 });

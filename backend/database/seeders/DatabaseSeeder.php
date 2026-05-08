@@ -19,6 +19,7 @@ class DatabaseSeeder extends Seeder
         $this->call([EmployerLocationSeeder::class]);
         $this->call([JtypeSeeder::class]);
         $this->call([JlevelSeeder::class]);
+        $this->call([JskillSeeder::class]);
         $this->call([IndustrySeeder::class]);
         $this->call([JobSeeder::class]);
         $this->call([JobIndustrySeeder::class]);

@@ -13,6 +13,20 @@ const buildPlaceholder = (label, width, height) => {
   return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
 };
 
+const buildLogoPlaceholder = () => {
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240">
+      <rect width="240" height="240" rx="32" fill="#f6fbf8" />
+      <rect x="44" y="42" width="152" height="156" rx="24" fill="#e8f8ef" stroke="#ccebdd" stroke-width="4" />
+      <path d="M82 184V72h76v112" fill="#ffffff" stroke="#087443" stroke-width="8" stroke-linejoin="round" />
+      <path d="M102 98h12M126 98h12M102 124h12M126 124h12M102 150h12M126 150h12" stroke="#00a85a" stroke-width="8" stroke-linecap="round" />
+      <path d="M94 184h52" stroke="#087443" stroke-width="8" stroke-linecap="round" />
+    </svg>
+  `;
+
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+};
+
 export const getFallbackImage = (variant = "default") => {
   switch (variant) {
     case "cover":
@@ -20,7 +34,7 @@ export const getFallbackImage = (variant = "default") => {
     case "avatar":
       return buildPlaceholder("No avatar", 240, 240);
     case "logo":
-      return buildPlaceholder("No logo", 240, 240);
+      return buildLogoPlaceholder();
     default:
       return buildPlaceholder("No image", 400, 300);
   }

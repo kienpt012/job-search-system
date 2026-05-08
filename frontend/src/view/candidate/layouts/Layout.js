@@ -1,6 +1,6 @@
 import "bootstrap/dist/js/bootstrap.js";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   BsArrowRight,
   BsBell,
@@ -21,6 +21,7 @@ import BellDialog from "./BellDialog";
 import { AppContext } from "../../../App";
 import clsx from "clsx";
 import AppImage from "../../../components/AppImage";
+import useRevealOnScroll from "../../../hooks/useRevealOnScroll";
 
 const TEXT = {
   home: "Trang chủ",
@@ -83,12 +84,16 @@ function Layout(props) {
   const [hasNew, setHasNew] = useState(false);
   const [showBellDialog, setShowBellDialog] = useState(false);
   const [showListMsg, setShowListMsg] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
   const [curNotification, setCurNotification] = useState({});
+  const userMenuRef = useRef(null);
   const { currentPage, setCurrentPage } = useContext(AppContext);
 
   const dispatch = useDispatch();
   const candidate = useSelector((state) => state.candAuth.current);
   const isAuth = useSelector((state) => state.candAuth.isAuth);
+
+  useRevealOnScroll([location.pathname]);
 
   const candidateName = useMemo(
     () =>
@@ -100,6 +105,7 @@ function Layout(props) {
   );
 
   const handleLogout = async () => {
+    setShowUserMenu(false);
     await authApi.logout(1);
     dispatch(candAuthActions.logout());
     localStorage.removeItem("candidate_jwt");
@@ -182,6 +188,19 @@ function Layout(props) {
       pusher.disconnect();
     };
   }, [candidate?.id, getAllMessages, isAuth]);
+
+  useEffect(() => {
+    if (!showUserMenu) return undefined;
+
+    const handleClickOutside = (event) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(event.target)) {
+        setShowUserMenu(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [showUserMenu]);
 
   return (
     <>
@@ -317,11 +336,12 @@ function Layout(props) {
                     </div>
                   </div>
 
-                  <div className="dropdown">
+                  <div className="dropdown site-user-dropdown" ref={userMenuRef}>
                     <button
                       type="button"
                       className="site-user-chip dropdown-toggle"
-                      data-bs-toggle="dropdown"
+                      aria-expanded={showUserMenu}
+                      onClick={() => setShowUserMenu((currentValue) => !currentValue)}
                     >
                       <AppImage
                         src={candidate?.avatar}
@@ -334,9 +354,18 @@ function Layout(props) {
                       />
                       <span className="site-user-chip__name">{candidateName}</span>
                     </button>
-                    <ul className="dropdown-menu dropdown-menu-end">
+                    <ul
+                      className={clsx(
+                        "dropdown-menu dropdown-menu-end site-user-menu",
+                        showUserMenu && "show"
+                      )}
+                    >
                       <li>
-                        <Link className="dropdown-item" to="/candidate">
+                        <Link
+                          className="dropdown-item"
+                          to="/candidate"
+                          onClick={() => setShowUserMenu(false)}
+                        >
                           {TEXT.account}
                         </Link>
                       </li>
@@ -363,7 +392,7 @@ function Layout(props) {
         {props.children}
       </main>
 
-      <footer className="site-footer">
+      <footer className="site-footer reveal">
         <div className="app-shell">
           <div className="site-footer__hero">
             <div className="site-footer__hero-copy">

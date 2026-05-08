@@ -4,6 +4,8 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use App\Models\Candidate;
+use App\Models\Jskill;
+use App\Models\Skill;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -76,6 +78,20 @@ class AuthController extends Controller
             'lastname' => $request->lastname,
             'email' => $request->email,
         ]);
+
+        $skillIds = $request->input('skills', []);
+        if (is_array($skillIds) && count($skillIds) > 0) {
+            $skillNames = Jskill::whereIn('id', $skillIds)->pluck('name');
+            foreach ($skillNames as $skillName) {
+                Skill::create([
+                    'candidate_id' => $user->id,
+                    'resume_id' => null,
+                    'name' => $skillName,
+                    'proficiency' => 0,
+                    'description' => null,
+                ]);
+            }
+        }
 
         return response()->json([
             'message' => 'User created successfully',

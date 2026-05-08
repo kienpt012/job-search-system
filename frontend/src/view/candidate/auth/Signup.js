@@ -1,10 +1,13 @@
 import { useForm } from "react-hook-form";
+import { useEffect, useState } from "react";
 import { AiFillWarning } from "react-icons/ai";
 import { useNavigate } from "react-router-dom";
 import authApi from "../../../api/auth";
+import jskillApi from "../../../api/jskill";
 import "../custom.css";
 
 function Signup() {
+  const [skillLibrary, setSkillLibrary] = useState([]);
   const requiredField = <span className="text-danger fw-bold">*</span>;
   const {
     register,
@@ -27,6 +30,7 @@ function Signup() {
 
   const onSubmit = async (userInfo) => {
     try {
+      userInfo.skills = userInfo.skills || [];
       await authApi.register(userInfo);
       alert('Đăng ký thành công!\nNhấn "OK" để quay về trang chủ');
       if (window.location.pathname === "/sign-up") {
@@ -36,6 +40,18 @@ function Signup() {
       alert("Email đã tồn tại trong hệ thống!");
     }
   };
+
+  useEffect(() => {
+    const loadSkills = async () => {
+      try {
+        setSkillLibrary(await jskillApi.getAll());
+      } catch (error) {
+        setSkillLibrary([]);
+      }
+    };
+
+    loadSkills();
+  }, []);
 
   return (
     <div className="page-section">
@@ -155,6 +171,28 @@ function Signup() {
                 watch("password") !== watch("re_password") ? (
                   <AlertMsg msg="Mật khẩu nhập lại không khớp" />
                 ) : null}
+
+                <div className="mb-2">
+                  <label htmlFor="skills" className="d-flex form-label">
+                    Kỹ năng hiện có
+                  </label>
+                  <select
+                    id="skills"
+                    className="form-select"
+                    multiple
+                    size="6"
+                    {...register("skills")}
+                  >
+                    {skillLibrary.map((skill) => (
+                      <option key={skill.id} value={skill.id}>
+                        {skill.name}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="form-text">
+                    Giữ Ctrl hoặc Cmd để chọn nhiều kỹ năng.
+                  </div>
+                </div>
 
                 <div className="mt-4">
                   <button

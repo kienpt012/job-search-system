@@ -108,6 +108,8 @@ class JobController extends Controller
         unset($new_record['industries']);
         $locations = $new_record['locations'];
         unset($new_record['locations']);
+        $skills = $new_record['skills'] ?? [];
+        unset($new_record['skills']);
 
         $new_record['employer_id'] = Auth::user()->id;
 
@@ -122,19 +124,22 @@ class JobController extends Controller
         }
         DB::table('job_location')->insert($job_locations);
 
+        $this->syncJobSkills($job->id, $skills);
+
         return response()->json('Updated successfully');
     }
-    public function update(Request $req)
+    public function update(Request $req, $id = null)
     {
+        $jobId = $id ?? $req->id;
         $update_fields = $req->all();
         if (isset($update_fields['industries'])) {
             $industries = $update_fields['industries'];
             unset($update_fields['industries']);
 
             //update job_industry
-            DB::table('job_industry')->where('job_id', $req->id)->delete();
+            DB::table('job_industry')->where('job_id', $jobId)->delete();
             for ($i = 0; $i < count($industries); $i++) {
-                $job_industries[$i] = collect(['job_id' => $req->id, 'industry_id' => $industries[$i]])->toArray();
+                $job_industries[$i] = collect(['job_id' => $jobId, 'industry_id' => $industries[$i]])->toArray();
             }
             DB::table('job_industry')->insert($job_industries);
         }
@@ -143,14 +148,21 @@ class JobController extends Controller
             unset($update_fields['locations']);
 
             //update job_location
-            DB::table('job_location')->where('job_id', $req->id)->delete();
+            DB::table('job_location')->where('job_id', $jobId)->delete();
             for ($i = 0; $i < count($locations); $i++) {
-                $job_locations[$i] = collect(['job_id' => $req->id, 'location_id' => $locations[$i]])->toArray();
+                $job_locations[$i] = collect(['job_id' => $jobId, 'location_id' => $locations[$i]])->toArray();
             }
             DB::table('job_location')->insert($job_locations);
         }
+        if (isset($update_fields['skills'])) {
+            $skills = $update_fields['skills'];
+            unset($update_fields['skills']);
+
+            $this->syncJobSkills($jobId, $skills);
+        }
         if (count($update_fields) > 0) {
-            Job::where('id', $req->id)
+            unset($update_fields['id']);
+            Job::where('id', $jobId)
                 ->update($update_fields);
         }
         $msg = 'Update successfully';
@@ -160,6 +172,13 @@ class JobController extends Controller
     public function getJobIndustries($id)
     {
         $res = Job::find($id)->industries;
+
+        return response()->json($res);
+    }
+
+    public function getJobSkills($id)
+    {
+        $res = Job::findOrFail($id)->skills;
 
         return response()->json($res);
     }
@@ -232,5 +251,28 @@ class JobController extends Controller
         if ($res != null) {
             return response()->json(['value' => true]);
         } else return response()->json(['value' => false]);
+    }
+
+    private function syncJobSkills($jobId, $skills)
+    {
+        DB::table('job_skill')->where('job_id', $jobId)->delete();
+
+        if (!is_array($skills) || count($skills) === 0) {
+            return;
+        }
+
+        $jobSkills = collect($skills)
+            ->filter(fn ($skillId) => $skillId !== null && $skillId !== '')
+            ->unique()
+            ->map(fn ($skillId) => [
+                'job_id' => $jobId,
+                'skill_id' => (int) $skillId,
+            ])
+            ->values()
+            ->toArray();
+
+        if (count($jobSkills) > 0) {
+            DB::table('job_skill')->insert($jobSkills);
+        }
     }
 }

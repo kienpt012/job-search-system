@@ -5,7 +5,9 @@ import { Form, Stack, Button } from "react-bootstrap";
 import RequiredMark from "../../../../../../components/form/requiredMark/RequiredMark";
 import Modal from "react-bootstrap/Modal";
 import skillApi from "../../../../../../api/skill";
+import jskillApi from "../../../../../../api/jskill";
 import { IoMdStar, IoMdStarOutline } from "react-icons/io";
+import { useEffect, useState } from "react";
 
 export default function SkillFormDialog({
   actType,
@@ -13,6 +15,7 @@ export default function SkillFormDialog({
   current,
   getAll,
 }) {
+  const [skillLibrary, setSkillLibrary] = useState([]);
   const requiredMsg = "Không được để trống";
   const schema = yup.object({
     name: yup.string().required(requiredMsg),
@@ -42,6 +45,18 @@ export default function SkillFormDialog({
     }
   };
 
+  useEffect(() => {
+    const loadSkills = async () => {
+      try {
+        setSkillLibrary(await jskillApi.getAll());
+      } catch (error) {
+        setSkillLibrary([]);
+      }
+    };
+
+    loadSkills();
+  }, []);
+
   return (
     <Modal
       show={actType !== "VIEW"}
@@ -59,13 +74,24 @@ export default function SkillFormDialog({
             <Form.Group className="mt-2">
               <Form.Label className="fw-600">Tên kỹ năng</Form.Label>
               <RequiredMark />
-              <Form.Control
+              <Form.Select
                 size="sm"
-                type="text"
-                defaultValue={actType === "EDIT" ? current.name : null}
+                defaultValue={actType === "EDIT" ? current.name : ""}
                 {...register("name")}
                 isInvalid={errors.name}
-              />
+              >
+                <option value="">Chọn kỹ năng</option>
+                {actType === "EDIT" &&
+                  current.name &&
+                  !skillLibrary.some((skill) => skill.name === current.name) && (
+                    <option value={current.name}>{current.name}</option>
+                  )}
+                {skillLibrary.map((skill) => (
+                  <option key={skill.id} value={skill.name}>
+                    {skill.name}
+                  </option>
+                ))}
+              </Form.Select>
               <Form.Control.Feedback type="invalid">
                 {errors.name?.message}
               </Form.Control.Feedback>

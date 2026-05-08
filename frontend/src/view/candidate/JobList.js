@@ -1,22 +1,32 @@
-import { useContext, useEffect, useState } from "react";
-import { BsSearch } from "react-icons/bs";
+import { useContext, useEffect, useMemo, useState } from "react";
+import {
+  BsArrowRight,
+  BsBookmark,
+  BsBriefcase,
+  BsBuilding,
+  BsCalendar3,
+  BsCashCoin,
+  BsClock,
+  BsGeoAlt,
+  BsSearch,
+  BsSliders,
+  BsStars,
+} from "react-icons/bs";
 import { useForm } from "react-hook-form";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import jobApi from "../../api/job";
 import industryApi from "../../api/industry";
 import locationApi from "../../api/location";
 import jtypeApi from "../../api/jtype";
 import jlevelApi from "../../api/jlevel";
 import { AppContext } from "../../App";
-import { MdOutlineAttachMoney, MdLocationOn } from "react-icons/md";
 import dayjs from "dayjs";
-import OverlayTrigger from "react-bootstrap/OverlayTrigger";
-import Tooltip from "react-bootstrap/Tooltip";
 import Spinner from "react-bootstrap/Spinner";
 import CPagination from "../../components/CPagination";
 import CMulSelect from "../../components/CMulSelect";
 import Form from "react-bootstrap/Form";
 import AppImage from "../../components/AppImage";
+import useRevealOnScroll from "../../hooks/useRevealOnScroll";
 import "./custom.css";
 
 function JobList() {
@@ -79,38 +89,107 @@ function JobList() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useRevealOnScroll([jobs.length, curPage]);
+
+  const visibleCompanyCount = useMemo(
+    () => new Set(jobs.map((job) => job.employer?.id).filter(Boolean)).size,
+    [jobs]
+  );
+
+  const averageSalary = useMemo(() => {
+    const salaries = jobs
+      .map((job) => Number(job.min_salary || job.max_salary || 0))
+      .filter((salary) => salary > 0);
+
+    if (!salaries.length) return "Thỏa thuận";
+
+    return `${Math.round(
+      salaries.reduce((total, salary) => total + salary, 0) / salaries.length
+    )} triệu`;
+  }, [jobs]);
+
+  const getTypeName = (id) => jtypes.find((item) => Number(item.id) === Number(id))?.name;
+  const getLevelName = (id) =>
+    jlevels.find((item) => Number(item.id) === Number(id))?.name;
+
+  const getDeadlineText = (expireAt) => {
+    const daysLeft = dayjs(expireAt).diff(new Date(), "day");
+    if (Number.isNaN(daysLeft)) return "Đang tuyển";
+    if (daysLeft <= 0) return "Sắp hết hạn";
+    return `Còn ${Math.min(daysLeft, 30)}${daysLeft > 30 ? "+" : ""} ngày`;
+  };
+
   return (
-    <div className="page-section mb-4">
-      <Form noValidate className="section-card" onSubmit={handleSubmit(handleFilter)}>
-        <div className="section-card__head">
-          <div>
-            <h1 className="app-section-title mb-1">Tìm việc làm nhanh hơn</h1>
-            <div className="app-section-subtitle">
-              Lọc theo ngành nghề, khu vực, mức lương và thời gian đăng.
+    <div className="jobs-page">
+      <section className="jobs-hero">
+        <div className="jobs-hero__copy">
+          <div className="jobs-eyebrow">
+            <BsStars />
+            Cơ hội tuyển dụng chất lượng
+          </div>
+          <h1>Tìm công việc phù hợp với bạn</h1>
+          <p>Khám phá hàng trăm cơ hội tuyển dụng chất lượng từ các công ty uy tín.</p>
+          <div className="jobs-hero__stats">
+            <div>
+              <strong>{jobs.length}</strong>
+              <span>Việc làm trang này</span>
+            </div>
+            <div>
+              <strong>{visibleCompanyCount}</strong>
+              <span>Công ty</span>
+            </div>
+            <div>
+              <strong>{averageSalary}</strong>
+              <span>Lương trung bình</span>
             </div>
           </div>
-          <div className="app-soft-badge">{jobs.length} job / trang</div>
         </div>
-
-        <div className="row g-3">
-          <div className="col-lg-4">
-            <Form.Group className="position-relative">
-              <Form.Control
-                type="text"
-                aria-label="job_keyword"
-                placeholder="Tìm việc làm"
-                {...register("keyword", { minLength: 3 })}
-                isInvalid={errors.keyword}
-              />
-              <Form.Control.Feedback type="invalid" tooltip>
-                Vui lòng nhập tối thiểu 3 ký tự
-              </Form.Control.Feedback>
-            </Form.Group>
+        <div className="jobs-hero__visual" aria-hidden="true">
+          <div className="jobs-visual-card">
+            <span>
+              <BsBriefcase />
+            </span>
+            <div>
+              <strong>Việc làm mới</strong>
+              <small>Lọc nhanh theo nhu cầu</small>
+            </div>
           </div>
-          <div className="col-lg-4">
+          <div className="jobs-visual-card jobs-visual-card--secondary">
+            <span>
+              <BsCashCoin />
+            </span>
+            <div>
+              <strong>Minh bạch lương</strong>
+              <small>So sánh cơ hội dễ hơn</small>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <Form
+        noValidate
+        className="jobs-search-panel"
+        onSubmit={handleSubmit(handleFilter)}
+      >
+        <div className="jobs-search-main">
+          <Form.Group className="jobs-search-field jobs-search-field--keyword">
+            <BsSearch />
+            <Form.Control
+              type="text"
+              aria-label="job_keyword"
+              placeholder="Tên vị trí, kỹ năng, công ty..."
+              {...register("keyword", { minLength: 3 })}
+              isInvalid={errors.keyword}
+            />
+            <Form.Control.Feedback type="invalid" tooltip>
+              Vui lòng nhập tối thiểu 3 ký tự
+            </Form.Control.Feedback>
+          </Form.Group>
+
+          <div className="jobs-search-field jobs-search-field--select">
             {industries.length > 0 && (
               <CMulSelect
-                defaultText="Tất cả ngành nghề"
+                defaultText="Ngành nghề"
                 items={industries}
                 textAtt="name"
                 valueAtt="id"
@@ -118,10 +197,11 @@ function JobList() {
               />
             )}
           </div>
-          <div className="col-lg-4">
+
+          <div className="jobs-search-field jobs-search-field--select">
             {locations.length > 0 && (
               <CMulSelect
-                defaultText="Tất cả tỉnh thành"
+                defaultText="Địa điểm"
                 items={locations}
                 textAtt="name"
                 valueAtt="id"
@@ -129,8 +209,17 @@ function JobList() {
               />
             )}
           </div>
-          <div className="col-lg-3">
-            <select className="form-select" {...register("salary")}>
+
+          <button type="submit" className="jobs-search-button">
+            {isSearchLoading ? <Spinner size="sm" /> : <BsSearch />}
+            Tìm kiếm
+          </button>
+        </div>
+
+        <div className="jobs-filter-row">
+          <label>
+            <BsCashCoin />
+            <select {...register("salary")}>
               <option value="">Mức lương</option>
               <option value="5">Trên 5 triệu</option>
               <option value="10">Trên 10 triệu</option>
@@ -141,145 +230,159 @@ function JobList() {
               <option value="40">Trên 40 triệu</option>
               <option value="50">Trên 50 triệu</option>
             </select>
-          </div>
-          <div className="col-lg-3">
-            <select className="form-select" {...register("jtype_id")}>
-              <option value="">Hình thức việc làm</option>
+          </label>
+          <label>
+            <BsBriefcase />
+            <select {...register("jtype_id")}>
+              <option value="">Hình thức</option>
               {jtypes.map((item) => (
                 <option value={item.id} key={"jtype" + item.id}>
                   {item.name}
                 </option>
               ))}
             </select>
-          </div>
-          <div className="col-lg-3">
-            <select className="form-select" {...register("jlevel_id")}>
-              <option value="">Cấp bậc</option>
+          </label>
+          <label>
+            <BsSliders />
+            <select {...register("jlevel_id")}>
+              <option value="">Kinh nghiệm / cấp bậc</option>
               {jlevels.map((item) => (
                 <option value={item.id} key={"jlevel" + item.id}>
                   {item.name}
                 </option>
               ))}
             </select>
-          </div>
-          <div className="col-lg-3">
-            <select className="form-select" {...register("posting_period")}>
-              <option value="">Đăng trong vòng</option>
+          </label>
+          <label>
+            <BsCalendar3 />
+            <select {...register("posting_period")}>
+              <option value="">Thời gian đăng</option>
               <option value="3">4 ngày trước</option>
               <option value="7">1 tuần trước</option>
               <option value="14">2 tuần trước</option>
               <option value="30">1 tháng trước</option>
             </select>
-          </div>
+          </label>
+          {["Remote", "Hybrid", "On-site"].map((label) => (
+            <button type="button" className="jobs-filter-chip" key={label}>
+              {label}
+            </button>
+          ))}
         </div>
-
-        <button type="submit" className="btn app-button-primary mt-4 px-4">
-          {isSearchLoading ? <Spinner size="sm" /> : <BsSearch className="fs-5" />}
-          <span> Tìm kiếm</span>
-        </button>
       </Form>
 
-      <div className="section-card mt-4">
-        <div className="section-card__head">
+      <section className="jobs-results-shell">
+        <div className="jobs-results-head">
           <div>
-            <h2 className="app-section-title mb-1">Danh sách việc làm</h2>
-            <div className="app-section-subtitle">
-              Gợi ý vị trí phù hợp dựa trên bộ lọc hiện tại.
-            </div>
+            <h2>Danh sách việc làm</h2>
+            <p>Gợi ý vị trí phù hợp dựa trên bộ lọc hiện tại.</p>
           </div>
+          <span>
+            <BsBriefcase />
+            {jobs.length} job / trang
+          </span>
         </div>
-        <div className="row g-4">
-          {jobs.length > 0 ? (
-            jobs.map((job) => (
-              <div
-                className="col-lg-6"
+
+        {jobs.length > 0 ? (
+          <div className="jobs-grid">
+            {jobs.map((job, index) => (
+              <article
+                className="job-premium-card reveal"
+                style={{ "--reveal-delay": `${index * 70}ms` }}
                 key={`job_${job.id}`}
                 onClick={() => nav(`/jobs/${job.id}`)}
               >
-                <div className="job-feature-card pointer h-100">
-                  <div className="d-flex gap-3">
-                    <div className="logo-frame" style={{ width: "100px", height: "100px" }}>
-                      <AppImage
-                        src={job.employer.logo}
-                        fallbackVariant="logo"
-                        width="100%"
-                        alt={job.jname}
-                      />
-                    </div>
-                    <div className="flex-fill">
-                      <OverlayTrigger
-                        placement="top"
-                        overlay={<Tooltip className="ts-xs">{job.jname}</Tooltip>}
-                      >
-                        <div className="fw-bold text-dark text-decoration-none hover-text-main">
-                          {job.jname}
-                        </div>
-                      </OverlayTrigger>
-                      <OverlayTrigger
-                        placement="top"
-                        overlay={<Tooltip className="ts-xs">{job.employer.name}</Tooltip>}
-                      >
-                        <div className="ts-smd text-secondary text-truncate">
-                          {job.employer.name}
-                        </div>
-                      </OverlayTrigger>
-                      <div className="ts-sm mt-2">
-                        <div className="d-flex flex-wrap gap-3">
-                          <div className="d-flex align-items-center">
-                            <MdOutlineAttachMoney className="fs-5 text-main" />
-                            {job.min_salary ? (
-                              <span>
-                                {job.min_salary} - {job.max_salary} triệu VND
-                              </span>
-                            ) : (
-                              <span>Theo thỏa thuận</span>
-                            )}
-                          </div>
-                          <OverlayTrigger
-                            placement="top"
-                            overlay={
-                              <Tooltip className="ts-xs">
-                                {job.locations?.map((item, index) => (
-                                  <div key={`location_${index}`}>
-                                    {item.name}
-                                    {index !== job.locations?.length - 1 && ", "}
-                                  </div>
-                                ))}
-                              </Tooltip>
-                            }
-                          >
-                            <div className="d-flex align-items-center">
-                              <MdLocationOn className="fs-5 text-main" />
-                              {job.locations && job.locations[0].name}
-                              {job.locations?.length > 1 && "..."}
-                            </div>
-                          </OverlayTrigger>
-                        </div>
-                        <div className="mt-3">
-                          <span className="app-soft-badge">
-                            Còn{" "}
-                            {dayjs().diff(job.expire_at, "day") <= 30
-                              ? dayjs(job.expire_at).diff(new Date(), "day")
-                              : "30+"}{" "}
-                            ngày
-                          </span>
-                        </div>
-                      </div>
-                    </div>
+                <div className="job-premium-card__top">
+                  <Link
+                    to={`/companies/${job.employer?.id}`}
+                    className="job-premium-logo"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <AppImage
+                      src={job.employer?.logo}
+                      fallbackVariant="logo"
+                      alt={job.jname}
+                    />
+                  </Link>
+                  <div className="job-premium-badges">
+                    {job.is_hot === 1 && <span>HOT</span>}
+                    <span>NEW</span>
                   </div>
                 </div>
-              </div>
-            ))
-          ) : (
-            <h4 className="my-4" style={{ marginLeft: "12px" }}>
-              Không có kết quả nào phù hợp!
-            </h4>
-          )}
-        </div>
-      </div>
+
+                <h3>{job.jname}</h3>
+                <Link
+                  to={`/companies/${job.employer?.id}`}
+                  className="job-premium-company"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <BsBuilding />
+                  {job.employer?.name}
+                </Link>
+
+                <div className="job-premium-meta">
+                  <span>
+                    <BsCashCoin />
+                    {job.min_salary ? (
+                      <>
+                        {job.min_salary} - {job.max_salary} triệu VND
+                      </>
+                    ) : (
+                      "Theo thỏa thuận"
+                    )}
+                  </span>
+                  <span>
+                    <BsGeoAlt />
+                    {job.locations?.[0]?.name || "Linh hoạt"}
+                    {job.locations?.length > 1 && " +"}
+                  </span>
+                  <span>
+                    <BsSliders />
+                    {getLevelName(job.jlevel_id) || `${job.yoe || 0}+ năm`}
+                  </span>
+                  <span>
+                    <BsBriefcase />
+                    {getTypeName(job.jtype_id) || "Toàn thời gian"}
+                  </span>
+                </div>
+
+                <div className="job-premium-bottom">
+                  <span className="job-deadline-pill">
+                    <BsClock />
+                    {getDeadlineText(job.expire_at)}
+                  </span>
+                  <div className="job-premium-actions">
+                    <button
+                      type="button"
+                      className="job-save-button"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <BsBookmark />
+                    </button>
+                    <Link
+                      to={`/jobs/${job.id}`}
+                      className="job-apply-button"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      Ứng tuyển
+                      <BsArrowRight />
+                    </Link>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="jobs-empty-state">
+            <BsSearch />
+            <h3>Không có kết quả phù hợp</h3>
+            <p>Thử thay đổi từ khóa, ngành nghề hoặc địa điểm để mở rộng tìm kiếm.</p>
+          </div>
+        )}
+      </section>
 
       <CPagination
-        className="justify-content-center mt-4"
+        className="jobs-pagination justify-content-center mt-4"
         totalPage={totalPage}
         curPage={curPage}
         setCurPage={setCurPage}

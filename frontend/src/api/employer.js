@@ -40,6 +40,20 @@ const employerApi = {
     let url = `${prefix}/getCandidateList?keyword=${keyword}&status=${status}`;
     return employerAxios.get(url);
   },
+  searchCandidates: (params) => {
+    return employerAxios.get(
+      `${prefix}/searchCandidates?${queryString.stringify(params, { arrayFormat: "index" })}`
+    );
+  },
+  getTalentRecommendations: () => {
+    return employerAxios.get(`${prefix}/talentRecommendations`);
+  },
+  getRecommendedCandidates: (jobId) => {
+    return employerAxios.get(`${prefix}/jobs/${jobId}/recommendedCandidates`);
+  },
+  contactCandidate: (data) => {
+    return employerAxios.post(`${prefix}/contactCandidate`, data);
+  },
   processApplying: (data) => {
     return employerAxios.post(`${prefix}/processApplying`, data);
   },

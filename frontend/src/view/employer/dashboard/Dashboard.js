@@ -139,6 +139,12 @@ const searchLocation = async (query) => {
   return res.json();
 };
 
+const handleAmbientPointerMove = (event) => {
+  const rect = event.currentTarget.getBoundingClientRect();
+  event.currentTarget.style.setProperty("--x", `${event.clientX - rect.left}px`);
+  event.currentTarget.style.setProperty("--y", `${event.clientY - rect.top}px`);
+};
+
 export default function EmployerDashboard() {
   const dispatch = useDispatch();
   const company = useSelector((state) => state.employerAuth.current.employer);
@@ -576,7 +582,7 @@ export default function EmployerDashboard() {
 
   return (
     <div className="employer-dashboard">
-      <section className="employer-dashboard__hero">
+      <section className="employer-dashboard__hero" onMouseMove={handleAmbientPointerMove}>
         <div className="employer-dashboard__hero-content">
           <div className="dashboard-kicker">Employer control room</div>
           <h1>{employer?.name || "Dashboard nhà tuyển dụng"}</h1>
@@ -605,6 +611,20 @@ export default function EmployerDashboard() {
               alt={employer?.name || "Company cover"}
             />
           </div>
+          <div className="dashboard-hero__metrics" aria-label="Recruitment summary">
+            <div>
+              <span>{dashboard.stats.total_jobs}</span>
+              <small>Tin tuyển dụng</small>
+            </div>
+            <div>
+              <span>{dashboard.stats.total_applications}</span>
+              <small>Lượt ứng tuyển</small>
+            </div>
+            <div>
+              <span>{dashboard.stats.passed_applications}</span>
+              <small>Ứng viên đạt</small>
+            </div>
+          </div>
           <div className="dashboard-hero__company">
             <div className="dashboard-hero__logo">
               <AppImage
@@ -630,7 +650,11 @@ export default function EmployerDashboard() {
 
       <section className="dashboard-summary-grid">
         {summaryCards.map((card) => (
-          <article key={card.title} className={`summary-card summary-card--${card.tone}`}>
+          <article
+            key={card.title}
+            className={`summary-card summary-card--${card.tone}`}
+            onMouseMove={handleAmbientPointerMove}
+          >
             <div className="summary-card__icon">{card.icon}</div>
             <div className="summary-card__body">
               <div className="summary-card__title">{card.title}</div>
@@ -642,7 +666,7 @@ export default function EmployerDashboard() {
       </section>
 
       <section className="dashboard-chart-grid">
-        <article className="dashboard-panel">
+        <article className="dashboard-panel dashboard-panel--ambient" onMouseMove={handleAmbientPointerMove}>
           <div className="dashboard-panel__head">
             <div>
               <h2>Ứng tuyển 6 tháng gần đây</h2>
@@ -665,9 +689,12 @@ export default function EmployerDashboard() {
               </div>
             ))}
           </div>
+          <div className="dashboard-panel__insight">
+            Pipeline đang được tính theo dữ liệu ứng tuyển 6 tháng gần nhất.
+          </div>
         </article>
 
-        <article className="dashboard-panel">
+        <article className="dashboard-panel dashboard-panel--ambient" onMouseMove={handleAmbientPointerMove}>
           <div className="dashboard-panel__head">
             <div>
               <h2>Hiệu quả từng tin tuyển dụng</h2>
@@ -675,9 +702,10 @@ export default function EmployerDashboard() {
             </div>
           </div>
           <div className="performance-list">
-            {dashboard.job_performance.map((item) => (
+            {dashboard.job_performance.map((item, index) => (
               <div key={item.id} className="performance-item">
                 <div className="performance-item__top">
+                  <div className="performance-item__rank">#{index + 1}</div>
                   <div>
                     <div className="performance-item__title">{item.jname}</div>
                     <div className="performance-item__meta">
