@@ -2,6 +2,16 @@ import { useForm } from "react-hook-form";
 import { AiOutlineLine } from "react-icons/ai";
 import jobApi from "../../../api/job";
 
+const toArray = (value) => {
+  if (value === undefined || value === null || value === "") {
+    return [];
+  }
+
+  return (Array.isArray(value) ? value : [value]).filter(
+    (item) => item !== false
+  );
+};
+
 function JobCreating({ jtypes, jlevels, industries, locations, skills }) {
   const {
     register,
@@ -12,17 +22,15 @@ function JobCreating({ jtypes, jlevels, industries, locations, skills }) {
 
   const onSubmit = async (job_inf) => {
     // console.log(job_inf);
-    for (let j = 0; j < job_inf.industries.length; j++) {
-      job_inf.industries[j] = industries[job_inf.industries[j]].id;
-    }
-    for (let j = 0; j < job_inf.locations.length; j++) {
-      job_inf.locations[j] = locations[job_inf.locations[j]].id;
-    }
-    if (job_inf.skills) {
-      for (let j = 0; j < job_inf.skills.length; j++) {
-        job_inf.skills[j] = skills[job_inf.skills[j]].id;
-      }
-    }
+    job_inf.industries = toArray(job_inf.industries).map(
+      (industryIndex) => industries[industryIndex].id
+    );
+    job_inf.locations = toArray(job_inf.locations).map(
+      (locationIndex) => locations[locationIndex].id
+    );
+    job_inf.skills = toArray(job_inf.skills).map(
+      (skillIndex) => skills[skillIndex].id
+    );
     delete job_inf.salaryOpt;
     if (job_inf.yoe === "") delete job_inf.yoe;
     if (job_inf.min_salary === "") delete job_inf.min_salary;
@@ -110,28 +118,36 @@ function JobCreating({ jtypes, jlevels, industries, locations, skills }) {
                 <strong>Kỹ năng yêu cầu:</strong>
                 <div className="d-flex mt-2">
                   <span>Chọn:</span>
-                  <select
-                    className="form-select w-25 ms-2"
-                    multiple
-                    size="6"
-                    {...register("skills")}
+                  <div
+                    className="d-grid gap-2 ms-2"
+                    style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", width: "75%" }}
                   >
                     {skills.map((item, index) => (
-                      <option value={index} key={"skill" + item.id}>
-                        {item.name}
-                      </option>
+                      <label
+                        className="form-check border rounded px-3 py-2 mb-0"
+                        key={"skill" + item.id}
+                        style={{ cursor: "pointer" }}
+                      >
+                        <input
+                          type="checkbox"
+                          className="form-check-input me-2"
+                          value={index}
+                          {...register("skills")}
+                        />
+                        <span className="form-check-label">{item.name}</span>
+                      </label>
                     ))}
-                  </select>
+                  </div>
                 </div>
-                {watch("skills") && watch("skills").length > 0 ? (
+                {toArray(watch("skills")).length > 0 ? (
                   <div
                     className="form-control disabled-field mt-2"
                     style={{ width: "50%" }}
                   >
-                    {watch("skills").map((item, index) => (
+                    {toArray(watch("skills")).map((item, index) => (
                       <span key={"cur_skill" + item}>
                         {skills[item].name}
-                        {index !== watch("skills").length - 1 && ", "}
+                        {index !== toArray(watch("skills")).length - 1 && ", "}
                       </span>
                     ))}
                   </div>

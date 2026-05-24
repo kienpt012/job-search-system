@@ -10,6 +10,7 @@ use App\Http\Controllers\CandidateController;
 use App\Http\Controllers\CandidateMessageController;
 use App\Http\Controllers\CertificateController;
 use App\Http\Controllers\EmployerController;
+use App\Http\Controllers\EmployerRegistrationController;
 use App\Http\Controllers\ExperienceController;
 use App\Http\Controllers\HeroSlideController;
 use App\Http\Controllers\IndustryController;
@@ -80,6 +81,13 @@ Route::controller(AdminController::class)->prefix('admin')->middleware('jwt')->g
     Route::post('users/{id}/status', 'toggleUserStatus');
     Route::post('users/{id}/password', 'updateUserPassword');
     Route::delete('users/{id}', 'destroyUser');
+});
+
+Route::controller(EmployerRegistrationController::class)->prefix('employer-registrations')->group(function () {
+    Route::post('', 'store');
+    Route::get('', 'index')->middleware('jwt');
+    Route::post('{id}/approve', 'approve')->middleware('jwt');
+    Route::post('{id}/reject', 'reject')->middleware('jwt');
 });
 
 Route::controller(JskillController::class)->prefix('jskills')->group(function () {

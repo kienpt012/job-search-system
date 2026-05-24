@@ -13,7 +13,7 @@ import {
   BsStars,
 } from "react-icons/bs";
 import { useForm } from "react-hook-form";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import jobApi from "../../api/job";
 import industryApi from "../../api/industry";
 import locationApi from "../../api/location";
@@ -31,31 +31,54 @@ import "./custom.css";
 
 function JobList() {
   const nav = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { setCurrentPage } = useContext(AppContext);
+  const initialKeyword = searchParams.get("keyword") || "";
+  const initialLocationId = searchParams.get("location_id") || "";
   const {
     register,
     handleSubmit,
     formState: { errors },
-  } = useForm();
+  } = useForm({
+    defaultValues: {
+      keyword: initialKeyword,
+    },
+  });
   const [jobs, setJobs] = useState([]);
   const [industries, setIndustries] = useState([]);
   const [locations, setLocations] = useState([]);
   const [jtypes, setJtypes] = useState([]);
   const [jlevels, setJlevels] = useState([]);
   const [selectedIndustries, setSelectedIndustries] = useState([]);
-  const [selectedLocations, setSelectedLocations] = useState([]);
+  const [selectedLocations, setSelectedLocations] = useState(
+    initialLocationId ? [initialLocationId] : []
+  );
   const [totalPage, setTotalPage] = useState(1);
   const [curPage, setCurPage] = useState(1);
   const [filterConditions, setFilterConditions] = useState({});
   const [isSearchLoading, setIsSearchLoading] = useState(false);
+  const [isPageLoading, setIsPageLoading] = useState(true);
+  const [listError, setListError] = useState("");
 
   const getJobs = async (page = 1, conditions) => {
-    const res = await jobApi.getList({
-      page,
-      ...(conditions || filterConditions),
-    });
-    setJobs(res.data);
-    setTotalPage(res.last_page);
+    try {
+      setIsPageLoading(true);
+      setListError("");
+      const res = await jobApi.getList({
+        page,
+        ...(conditions || filterConditions),
+      });
+      setJobs(Array.isArray(res.data) ? res.data : []);
+      setTotalPage(res.last_page || 1);
+    } catch (error) {
+      setJobs([]);
+      setTotalPage(1);
+      setListError(
+        "Ch\u01b0a th\u1ec3 t\u1ea3i danh s\u00e1ch vi\u1ec7c l\u00e0m. Vui l\u00f2ng th\u1eed l\u1ea1i sau."
+      );
+    } finally {
+      setIsPageLoading(false);
+    }
   };
   const getAllIndustries = async () => setIndustries((await industryApi.getAll()).inf);
   const getAllLocations = async () => setLocations(await locationApi.getAll());
@@ -69,8 +92,14 @@ function JobList() {
         industry_id: selectedIndustries,
         location_id: selectedLocations,
       };
+      const nextParams = {};
+      if (data.keyword) nextParams.keyword = data.keyword;
+      if (selectedLocations.length === 1) {
+        nextParams.location_id = selectedLocations[0];
+      }
       setIsSearchLoading(true);
       setFilterConditions(conditions);
+      setSearchParams(nextParams);
       await getJobs(1, conditions);
       setCurPage(1);
       setIsSearchLoading(false);
@@ -81,7 +110,12 @@ function JobList() {
 
   useEffect(() => {
     setCurrentPage("jobs");
-    getJobs();
+    const initialConditions = {
+      ...(initialKeyword ? { keyword: initialKeyword } : {}),
+      ...(initialLocationId ? { location_id: [initialLocationId] } : {}),
+    };
+    setFilterConditions(initialConditions);
+    getJobs(1, initialConditions);
     getAllIndustries();
     getAllLocations();
     getAllJtypes();
@@ -283,7 +317,24 @@ function JobList() {
           </span>
         </div>
 
-        {jobs.length > 0 ? (
+        {isPageLoading ? (
+          <div className="jobs-skeleton-grid" aria-label="Loading jobs">
+            {[0, 1, 2, 3].map((item) => (
+              <div className="jobs-skeleton-card" key={item}>
+                <span />
+                <i />
+                <i />
+                <i />
+              </div>
+            ))}
+          </div>
+        ) : listError ? (
+          <div className="jobs-empty-state jobs-empty-state--error">
+            <BsSearch />
+            <h3>{"Ch\u01b0a th\u1ec3 t\u1ea3i danh s\u00e1ch vi\u1ec7c l\u00e0m"}</h3>
+            <p>{listError}</p>
+          </div>
+        ) : jobs.length > 0 ? (
           <div className="jobs-grid">
             {jobs.map((job, index) => (
               <article
@@ -381,13 +432,15 @@ function JobList() {
         )}
       </section>
 
-      <CPagination
-        className="jobs-pagination justify-content-center mt-4"
-        totalPage={totalPage}
-        curPage={curPage}
-        setCurPage={setCurPage}
-        getList={getJobs}
-      />
+      {!isPageLoading && !listError && totalPage > 1 && (
+        <CPagination
+          className="jobs-pagination justify-content-center mt-4"
+          totalPage={totalPage}
+          curPage={curPage}
+          setCurPage={setCurPage}
+          getList={getJobs}
+        />
+      )}
     </div>
   );
 }

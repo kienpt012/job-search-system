@@ -244,6 +244,101 @@
   color: #64748b;
 }
 
+.system-registration-list {
+  display: grid;
+  gap: 16px;
+}
+
+.system-registration-card {
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 22px;
+  background: #f8fafc;
+}
+
+.system-registration-card__main,
+.system-registration-card__actions,
+.system-registration-card__documents {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.system-registration-card__main {
+  justify-content: space-between;
+}
+
+.system-registration-card h3,
+.system-registration-card p {
+  margin: 0;
+}
+
+.system-registration-card h3 {
+  color: #0f172a;
+  font-size: 1.12rem;
+  font-weight: 900;
+}
+
+.system-registration-card p,
+.system-registration-card span {
+  color: #475569;
+}
+
+.system-registration-card__grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.system-registration-card__grid div {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border-radius: 16px;
+  background: #fff;
+}
+
+.system-registration-card__grid strong {
+  color: #0f172a;
+}
+
+.system-registration-card__description {
+  padding: 14px;
+  border-radius: 16px;
+  background: #fff;
+  line-height: 1.7;
+}
+
+.system-registration-card__documents a {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #0369a1;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.system-badge--pending {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.system-badge--approved {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.system-badge--rejected {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
 .system-admin-editor-grid {
   grid-template-columns: minmax(0, 1.4fr) minmax(320px, 0.8fr);
 }

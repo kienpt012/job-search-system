@@ -4,6 +4,7 @@ import {
   BsBoxArrowRight,
   BsBriefcaseFill,
   BsImages,
+  BsPersonCheckFill,
   BsShieldLockFill,
   BsTagsFill,
 } from "react-icons/bs";
@@ -18,6 +19,7 @@ const TEXT = {
   title: "Recruitment Control",
   dashboard: "B\u1ea3ng \u0111i\u1ec1u khi\u1ec3n",
   jobs: "Qu\u1ea3n l\u00fd vi\u1ec7c l\u00e0m",
+  employerApprovals: "Duy\u1ec7t nh\u00e0 tuy\u1ec3n d\u1ee5ng",
   skills: "Th\u01b0 vi\u1ec7n k\u1ef9 n\u0103ng",
   appearance: "Giao di\u1ec7n",
   loggedInAs: "\u0110\u0103ng nh\u1eadp v\u1edbi",
@@ -107,6 +109,17 @@ export default function AdminLayout({ children }) {
         >
           <BsBriefcaseFill />
           <span>{TEXT.jobs}</span>
+        </button>
+
+        <button
+          type="button"
+          className={`admin-sidebar__link ${
+            location.pathname === "/admin/employer-approvals" ? "is-active" : ""
+          }`}
+          onClick={() => nav("/admin/employer-approvals")}
+        >
+          <BsPersonCheckFill />
+          <span>{TEXT.employerApprovals}</span>
         </button>
 
         <button

@@ -32,6 +32,11 @@ const adminApi = {
   updateUserStatus: (id, params) => adminAxios.post(`/admin/users/${id}/status`, params),
   updateUserPassword: (id, params) => adminAxios.post(`/admin/users/${id}/password`, params),
   deleteUser: (id) => adminAxios.delete(`/admin/users/${id}`),
+  getEmployerRegistrations: () => adminAxios.get("/employer-registrations"),
+  approveEmployerRegistration: (id, params = {}) =>
+    adminAxios.post(`/employer-registrations/${id}/approve`, params),
+  rejectEmployerRegistration: (id, params = {}) =>
+    adminAxios.post(`/employer-registrations/${id}/reject`, params),
 };
 
 export default adminApi;

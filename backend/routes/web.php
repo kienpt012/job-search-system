@@ -72,3 +72,16 @@ Route::get('/hero_slides/{filename}', function ($filename) {
 
     return response()->file($path);
 });
+
+Route::get('/employer_documents/{filename}', function ($filename) {
+    if (!preg_match('/^[A-Za-z0-9._-]+$/', $filename)) {
+        abort(404);
+    }
+
+    $path = storage_path('employer_documents/' . $filename);
+    if (!File::exists($path)) {
+        abort(404);
+    }
+
+    return response()->file($path);
+});

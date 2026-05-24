@@ -9,12 +9,14 @@ const JobList = lazy(() => import("./view/candidate/JobList"));
 const Job = lazy(() => import("./view/candidate/Job"));
 const EmployerLayout = lazy(() => import("./view/employer/layouts/Layout"));
 const EmployerLogin = lazy(() => import("./view/employer/auth/Login"));
+const EmployerRegister = lazy(() => import("./view/employer/auth/Register"));
 const AdminLayout = lazy(() => import("./view/admin/Layout"));
 const AdminLogin = lazy(() => import("./view/admin/Login"));
 const AdminDashboard = lazy(() => import("./view/admin/Dashboard"));
 const AdminJobs = lazy(() => import("./view/admin/Jobs"));
 const AdminAppearance = lazy(() => import("./view/admin/Appearance"));
 const AdminSkills = lazy(() => import("./view/admin/Skills"));
+const EmployerApprovals = lazy(() => import("./view/admin/EmployerApprovals"));
 const CandidateList = lazy(() => import("./view/employer/candidates/CandidateList"));
 const CandidateSearch = lazy(() => import("./view/employer/candidates/CandidateSearch"));
 const JobManagement = lazy(() => import("./view/employer/jobs/JobManagement"));
@@ -53,6 +55,7 @@ function App() {
                     <Route path="jobs" element={<AdminJobs />} />
                     <Route path="skills" element={<AdminSkills />} />
                     <Route path="appearance" element={<AdminAppearance />} />
+                    <Route path="employer-approvals" element={<EmployerApprovals />} />
                   </Routes>
                 </AdminLayout>
               }
@@ -89,6 +92,8 @@ function App() {
                 </Layout>
               }
             />
+            <Route path="employer/login" element={<EmployerLogin />} />
+            <Route path="employer/register" element={<EmployerRegister />} />
             <Route
               path="employer/*"
               element={
@@ -102,7 +107,6 @@ function App() {
                 </EmployerLayout>
               }
             />
-            <Route path="employer/login" element={<EmployerLogin />} />
           </Routes>
         </Suspense>
       </BrowserRouter>

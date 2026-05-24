@@ -474,10 +474,6 @@ export default function CandidateSearch() {
           <div>
             <div className="talent-badge">Ứng viên phù hợp</div>
             <h2>Đây là những ứng viên phù hợp với các công việc bạn đang tuyển</h2>
-            <p>
-              Hệ thống tự so khớp kỹ năng ứng viên với kỹ năng đã chọn trong từng job,
-              không cần lọc thủ công.
-            </p>
           </div>
           <span className="talent-soft-pill">
             <BsStars />

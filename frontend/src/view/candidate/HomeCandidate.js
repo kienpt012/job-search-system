@@ -1,5 +1,5 @@
 import axios from "axios";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   BsArrowRight,
   BsBriefcase,
@@ -7,14 +7,18 @@ import {
   BsCaretLeft,
   BsCaretRight,
   BsCurrencyDollar,
+  BsFileEarmarkText,
   BsGeoAlt,
+  BsGraphUp,
   BsPatchCheck,
   BsPinMapFill,
   BsSearch,
+  BsShieldCheck,
 } from "react-icons/bs";
 import { Link, useNavigate } from "react-router-dom";
 import { useSelector } from "react-redux";
 import candidateApi from "../../api/candidate";
+import locationApi from "../../api/location";
 import AppImage from "../../components/AppImage";
 import useRevealOnScroll from "../../hooks/useRevealOnScroll";
 import "./custom.css";
@@ -37,6 +41,11 @@ function HomeCandidate() {
   const [currentHeroSlide, setCurrentHeroSlide] = useState(0);
   const [nearbyCompanies, setNearbyCompanies] = useState(initialNearbyCompanies);
   const [isLoadingNearbyCompanies, setIsLoadingNearbyCompanies] = useState(false);
+  const [locations, setLocations] = useState([]);
+  const [heroSearch, setHeroSearch] = useState({
+    keyword: "",
+    location_id: "",
+  });
   const [page, setPage] = useState({ links: [] });
   const [curPage, setCurPage] = useState(1);
 
@@ -74,6 +83,15 @@ function HomeCandidate() {
 
   useEffect(() => {
     getHotJobs(`${apiUrl}/api/jobs/getHotList`);
+    locationApi
+      .getAll()
+      .then((res) => {
+        setLocations(Array.isArray(res) ? res.slice(0, 8) : []);
+      })
+      .catch((error) => {
+        console.log(error);
+        setLocations([]);
+      });
     axios
       .get(`${apiUrl}/api/hero-slides`)
       .then((res) => {
@@ -153,6 +171,86 @@ function HomeCandidate() {
   const getCompanyJobCount = (company) =>
     company?.job_num ?? company?.jobs_count ?? company?.jobs?.length ?? 0;
 
+  const marketStats = useMemo(
+    () => [
+      {
+        icon: <BsBriefcase />,
+        label: "Viec lam noi bat",
+        value: `${hotJobs.length}+`,
+        note: "Dang duoc uu tien hien thi",
+      },
+      {
+        icon: <BsBuilding />,
+        label: "Cong ty dang tuyen",
+        value: `${hotCompanies.length}+`,
+        note: "Co ho so cong ty ro rang",
+      },
+      {
+        icon: <BsGraphUp />,
+        label: "Cap nhat hom nay",
+        value: "24h",
+        note: "Theo doi co hoi moi lien tuc",
+      },
+    ],
+    [hotCompanies.length, hotJobs.length]
+  );
+
+  const popularCategories = [
+    "Kinh doanh",
+    "Marketing",
+    "Cong nghe thong tin",
+    "Cham soc khach hang",
+    "Nhan su",
+    "Ke toan",
+  ];
+
+  const careerTools = [
+    {
+      icon: <BsFileEarmarkText />,
+      title: "Ho so va CV",
+      desc: "Hoan thien thong tin ca nhan, kinh nghiem va ky nang truoc khi ung tuyen.",
+      to: isCandidateAuth ? "/candidate/profile" : "/sign-up",
+    },
+    {
+      icon: <BsBriefcase />,
+      title: "Viec lam da luu",
+      desc: "Gom cac co hoi can theo doi de so sanh luong, dia diem va cong ty.",
+      to: isCandidateAuth ? "/candidate/saved-jobs" : "/jobs",
+    },
+    {
+      icon: <BsPatchCheck />,
+      title: "Ung tuyen da gui",
+      desc: "Theo doi nhung cong viec da nop ho so trong khong gian ung vien.",
+      to: isCandidateAuth ? "/candidate/applied-jobs" : "/sign-up",
+    },
+  ];
+
+  const safetyTips = [
+    "Kiem tra ten cong ty, dia chi va thong tin lien he truoc khi nop ho so.",
+    "Khong chuyen phi phong van, phi giu cho hoac phi dao tao bat thuong.",
+    "Uu tien tin tuyen dung co mo ta cong viec, luong va yeu cau minh bach.",
+  ];
+
+  const handleHeroSearchChange = (event) => {
+    const { name, value } = event.target;
+    setHeroSearch((current) => ({
+      ...current,
+      [name]: value,
+    }));
+  };
+
+  const handleHeroSearchSubmit = (event) => {
+    event.preventDefault();
+    const params = new URLSearchParams();
+    if (heroSearch.keyword.trim()) {
+      params.set("keyword", heroSearch.keyword.trim());
+    }
+    if (heroSearch.location_id) {
+      params.set("location_id", heroSearch.location_id);
+    }
+    nav(params.toString() ? `/jobs?${params.toString()}` : "/jobs");
+  };
+
   return (
     <div className="home-page">
       <section className="hero-panel">
@@ -185,6 +283,42 @@ function HomeCandidate() {
                 <BsArrowRight />
               </Link>
             </div>
+
+            <form
+              className="home-hero-search reveal"
+              style={{ "--reveal-delay": "180ms" }}
+              onSubmit={handleHeroSearchSubmit}
+            >
+              <label className="home-hero-search__field">
+                <BsSearch />
+                <input
+                  type="text"
+                  name="keyword"
+                  value={heroSearch.keyword}
+                  onChange={handleHeroSearchChange}
+                  placeholder="Vi tri, ky nang, ten cong ty..."
+                />
+              </label>
+              <label className="home-hero-search__field home-hero-search__field--select">
+                <BsGeoAlt />
+                <select
+                  name="location_id"
+                  value={heroSearch.location_id}
+                  onChange={handleHeroSearchChange}
+                >
+                  <option value="">Tat ca dia diem</option>
+                  {locations.map((location) => (
+                    <option value={location.id} key={`home_location_${location.id}`}>
+                      {location.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button type="submit" className="home-hero-search__button">
+                Tim viec
+                <BsArrowRight />
+              </button>
+            </form>
 
             <div className="hero-stats">
               <div className="metric-card reveal" style={{ "--reveal-delay": "220ms" }}>
@@ -242,6 +376,29 @@ function HomeCandidate() {
         </div>
       </section>
 
+      <section className="market-snapshot reveal">
+        <div className="market-snapshot__head">
+          <div>
+            <span className="app-soft-badge">Thi truong viec lam hom nay</span>
+            <h2>Thong tin nhanh de ung vien ra quyet dinh tot hon</h2>
+          </div>
+          <Link to="/jobs" className="market-snapshot__link">
+            Xem tat ca viec lam
+            <BsArrowRight />
+          </Link>
+        </div>
+        <div className="market-snapshot__grid">
+          {marketStats.map((item) => (
+            <div className="market-stat-card" key={item.label}>
+              <span>{item.icon}</span>
+              <strong>{item.value}</strong>
+              <label>{item.label}</label>
+              <p>{item.note}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
       <section className="feature-strip">
         {[
           ["Tìm kiếm nhanh", "Duyệt job nổi bật với thông tin cần thiết ngay trên card."],
@@ -262,6 +419,34 @@ function HomeCandidate() {
             </div>
           </div>
         ))}
+      </section>
+
+      <section className="section-card section-card--categories reveal">
+        <div className="section-card__head">
+          <div>
+            <h2 className="app-section-title mb-1">Nhom nganh duoc quan tam</h2>
+            <div className="app-section-subtitle">
+              Goi y loi vao nhanh theo cach nguoi tim viec thuong bat dau hanh trinh.
+            </div>
+          </div>
+          <Link to="/jobs" className="app-soft-badge text-decoration-none">
+            Loc chi tiet
+            <BsArrowRight />
+          </Link>
+        </div>
+        <div className="category-pill-grid">
+          {popularCategories.map((category) => (
+            <Link
+              to={`/jobs?keyword=${encodeURIComponent(category)}`}
+              className="category-pill-card"
+              key={category}
+            >
+              <BsSearch />
+              <span>{category}</span>
+              <BsArrowRight />
+            </Link>
+          ))}
+        </div>
       </section>
 
       <section className="section-card section-card--jobs reveal">
@@ -361,6 +546,50 @@ function HomeCandidate() {
                 : null}
             </button>
           ))}
+        </div>
+      </section>
+
+      <section className="candidate-growth-grid reveal">
+        <div className="candidate-tools-panel">
+          <div className="section-card__head">
+            <div>
+              <h2 className="app-section-title mb-1">Cong cu cho ung vien</h2>
+              <div className="app-section-subtitle">
+                Khong chi tim job, ung vien can ho so tot va luong theo doi ro rang.
+              </div>
+            </div>
+          </div>
+          <div className="candidate-tool-list">
+            {careerTools.map((tool) => (
+              <Link to={tool.to} className="candidate-tool-card" key={tool.title}>
+                <span>{tool.icon}</span>
+                <div>
+                  <strong>{tool.title}</strong>
+                  <p>{tool.desc}</p>
+                </div>
+                <BsArrowRight />
+              </Link>
+            ))}
+          </div>
+        </div>
+
+        <div className="safety-panel">
+          <span className="safety-panel__icon">
+            <BsShieldCheck />
+          </span>
+          <h2>Ung tuyen an toan</h2>
+          <p>
+            Mot website tuyen dung chuyen nghiep nen chu dong nhac ung vien kiem tra
+            rui ro truoc khi nop ho so.
+          </p>
+          <div className="safety-tip-list">
+            {safetyTips.map((tip) => (
+              <div key={tip}>
+                <BsPatchCheck />
+                <span>{tip}</span>
+              </div>
+            ))}
+          </div>
         </div>
       </section>
 

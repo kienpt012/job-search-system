@@ -105,7 +105,7 @@ function Login() {
           <hr />
           <div className="text-center">
             Bạn là nhà tuyển dụng mới?&nbsp;
-            <Link to={`#`} className="text-decoration-none">
+            <Link to={`/employer/register`} className="text-decoration-none">
               Đăng ký tài khoản
             </Link>
           </div>

@@ -10,6 +10,9 @@ const authApi = {
   register: (params) => {
     return commonAxios.post("/register", params);
   },
+  registerEmployer: (formData) => {
+    return commonAxios.post("/employer-registrations", formData);
+  },
   logout: (role) => {
     if (role === 0) return adminAxios.get("/logout");
     if (role === 1) return candidateAxios.get("/logout");

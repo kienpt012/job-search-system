@@ -3,6 +3,16 @@ import { useForm } from "react-hook-form";
 import { AiOutlineLine } from "react-icons/ai";
 import jobApi from "../../../api/job";
 
+const toArray = (value) => {
+  if (value === undefined || value === null || value === "") {
+    return [];
+  }
+
+  return (Array.isArray(value) ? value : [value]).filter(
+    (item) => item !== false
+  );
+};
+
 function JobDetail({ inf, jtypes, jlevels, industries, locations, skills }) {
   const jobIndustries = inf.industries;
   const jobLocations = inf.locations;
@@ -44,9 +54,9 @@ function JobDetail({ inf, jtypes, jlevels, industries, locations, skills }) {
         }
       }
       if (key === "skills") {
-        for (let j = 0; j < job_inf[key].length; j++) {
-          job_inf[key][j] = skills[job_inf[key][j]].id;
-        }
+        job_inf[key] = toArray(job_inf[key]).map(
+          (skillIndex) => skills[skillIndex].id
+        );
       }
     }
     console.log(job_inf);
@@ -284,10 +294,10 @@ function JobDetail({ inf, jtypes, jlevels, industries, locations, skills }) {
                       </>
                     ) : (
                       <>
-                        {watch("skills").map((item, index) => (
+                        {toArray(watch("skills")).map((item, index) => (
                           <span key={"cur_skill" + index}>
                             {skills[item].name}
-                            {index !== watch("skills").length - 1 && ", "}
+                            {index !== toArray(watch("skills")).length - 1 && ", "}
                           </span>
                         ))}
                       </>
@@ -304,18 +314,27 @@ function JobDetail({ inf, jtypes, jlevels, industries, locations, skills }) {
                 {isEditSkill && (
                   <div className="d-flex mt-2">
                     <span>Chọn:</span>
-                    <select
-                      className="form-select w-25 ms-2"
-                      multiple
-                      size="6"
-                      {...register("skills")}
+                    <div
+                      className="d-grid gap-2 ms-2"
+                      style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", width: "75%" }}
                     >
                       {skills.map((item, index) => (
-                        <option value={index} key={"skill" + item.id}>
-                          {item.name}
-                        </option>
+                        <label
+                          className="form-check border rounded px-3 py-2 mb-0"
+                          key={"skill" + item.id}
+                          style={{ cursor: "pointer" }}
+                        >
+                          <input
+                            type="checkbox"
+                            className="form-check-input me-2"
+                            value={index}
+                            defaultChecked={jobSkills.some((skill) => skill.id === item.id)}
+                            {...register("skills")}
+                          />
+                          <span className="form-check-label">{item.name}</span>
+                        </label>
                       ))}
-                    </select>
+                    </div>
                   </div>
                 )}
               </div>

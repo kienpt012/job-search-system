@@ -13,6 +13,7 @@ import {
   BsGlobe2,
   BsPersonWorkspace,
   BsShare,
+  BsShieldCheck,
   BsUpload,
 } from "react-icons/bs";
 import { FaIndustry } from "react-icons/fa";
@@ -69,6 +70,31 @@ const buildGoogleMapsUrl = (lat, lng) => {
   }
 
   return `https://www.google.com/maps/search/?api=1&query=${Number(lat)},${Number(lng)}`;
+};
+
+const APPLY_MODAL_TEXT = {
+  applyFor: "\u1ee8ng tuy\u1ec3n v\u00e0o v\u1ecb tr\u00ed",
+  candidateInfo: "Th\u00f4ng tin \u1ee9ng vi\u00ean",
+  fullName: "H\u1ecd v\u00e0 t\u00ean",
+  email: "Email",
+  resumeLabel: "H\u1ed3 s\u01a1 c\u1ee7a b\u1ea1n",
+  createResume: "T\u1ea1o h\u1ed3 s\u01a1 tr\u1ef1c tuy\u1ebfn",
+  uploadResume: "T\u1ea3i l\u00ean h\u1ed3 s\u01a1 c\u00f3 s\u1eb5n",
+  manageResume: "Qu\u1ea3n l\u00fd / t\u1ea1o th\u00eam h\u1ed3 s\u01a1",
+  submit: "N\u1ed9p h\u1ed3 s\u01a1",
+  submitting: "\u0110ang n\u1ed9p...",
+  close: "\u0110\u00f3ng",
+  safetyTitle: "Ki\u1ec3m tra an to\u00e0n tr\u01b0\u1edbc khi n\u1ed9p",
+  safetyIntro:
+    "Tin tuy\u1ec3n d\u1ee5ng uy t\u00edn kh\u00f4ng y\u00eau c\u1ea7u chuy\u1ec3n ph\u00ed, \u0111\u1eb7t c\u1ecdc ho\u1eb7c g\u1eedi gi\u1ea5y t\u1edd nh\u1ea1y c\u1ea3m ngo\u00e0i h\u1ec7 th\u1ed1ng.",
+  safetyItems: [
+    "So kh\u1edbp t\u00ean c\u00f4ng ty, email v\u00e0 \u0111\u1ecba ch\u1ec9 li\u00ean h\u1ec7.",
+    "\u0110\u1ecdc k\u1ef9 m\u00f4 t\u1ea3, quy\u1ec1n l\u1ee3i, l\u01b0\u01a1ng v\u00e0 h\u1ea1n n\u1ed9p.",
+    "Ch\u1ec9 n\u1ed9p file PDF, tr\u00e1nh chia s\u1ebb th\u00f4ng tin kh\u00f4ng c\u1ea7n thi\u1ebft.",
+  ],
+  resumeTipTitle: "M\u1eb9o CV",
+  resumeTip:
+    "Ch\u1ecdn CV li\u00ean quan nh\u1ea5t v\u1edbi v\u1ecb tr\u00ed n\u00e0y, \u01b0u ti\u00ean k\u1ef9 n\u0103ng v\u00e0 kinh nghi\u1ec7m c\u00f3 trong m\u00f4 t\u1ea3 c\u00f4ng vi\u1ec7c.",
 };
 
 const escapeHtml = (value = "") =>
@@ -350,11 +376,11 @@ const createPdfFileFromResume = async (resumeData, fallbackTitle) => {
 
   try {
     const canvas = await html2canvas(tempElement, {
-      scale: 2,
+      scale: 1,
       backgroundColor: "#ffffff",
       useCORS: true,
     });
-    const imageData = canvas.toDataURL("image/png");
+    const imageData = canvas.toDataURL("image/jpeg", 0.82);
     const pdf = new jsPDF("p", "mm", "a4");
     const pdfWidth = pdf.internal.pageSize.getWidth();
     const pdfHeight = pdf.internal.pageSize.getHeight();
@@ -362,13 +388,13 @@ const createPdfFileFromResume = async (resumeData, fallbackTitle) => {
     let remainingHeight = imageHeight;
     let position = 0;
 
-    pdf.addImage(imageData, "PNG", 0, position, pdfWidth, imageHeight);
+    pdf.addImage(imageData, "JPEG", 0, position, pdfWidth, imageHeight);
     remainingHeight -= pdfHeight;
 
     while (remainingHeight > 0) {
       position = remainingHeight - imageHeight;
       pdf.addPage();
-      pdf.addImage(imageData, "PNG", 0, position, pdfWidth, imageHeight);
+      pdf.addImage(imageData, "JPEG", 0, position, pdfWidth, imageHeight);
       remainingHeight -= pdfHeight;
     }
 
@@ -475,6 +501,14 @@ function Job() {
       await jobApi.apply(id, formData);
       alert("Ứng tuyển thành công!");
       window.location.reload();
+    } catch (error) {
+      const status = error?.response?.status;
+
+      if (status === 413) {
+        alert("Hồ sơ quá lớn nên server từ chối nhận. Vui lòng thử tải lên file PDF nhẹ hơn hoặc rút gọn hồ sơ online.");
+      } else {
+        alert(error?.response?.data?.message || "Không thể nộp hồ sơ. Vui lòng thử lại.");
+      }
     } finally {
       setIsApplying(false);
     }
@@ -1061,11 +1095,8 @@ function Job() {
 
       {isAuth && (
         <div className="modal fade" id="applying_dialog">
-          <div
-            className="modal-dialog modal-lg modal-fullscreen-sm-down modal-dialog-scrollable"
-            style={{ width: "60%" }}
-          >
-            <div className="modal-content">
+          <div className="modal-dialog modal-lg modal-fullscreen-sm-down modal-dialog-scrollable job-apply-modal-dialog">
+            <div className="modal-content job-apply-modal">
               <div className="modal-header border-bottom-0">
                 <button
                   type="button"
@@ -1073,14 +1104,14 @@ function Job() {
                   data-bs-dismiss="modal"
                 ></button>
               </div>
-              <div className="modal-body ps-5">
+              <div className="modal-body job-apply-modal__body">
                 <span style={{ fontSize: "15px" }}>Ứng tuyển vào vị trí</span>
                 <h4>{job.jname}</h4>
                 <span className="text-secondary" style={{ fontSize: "15px" }}>
                   {job.employer.name}
                 </span>
 
-                <form className="mt-3" style={{ width: "65%" }}>
+                <form className="job-apply-form">
                   <div>
                     <label htmlFor="fullname">Họ và tên</label>
                     <input
@@ -1102,7 +1133,7 @@ function Job() {
                     />
                   </div>
                 </form>
-                <div className="mt-3">
+                <div className="job-apply-resumes">
                   Hồ sơ của bạn:
                   <div>
                     {resumes.length > 0 && !isUpload && (
@@ -1196,6 +1227,20 @@ function Job() {
                     )}
                   </div>
                 </div>
+                <aside className="job-apply-safety">
+                  <BsShieldCheck />
+                  <strong>{APPLY_MODAL_TEXT.safetyTitle}</strong>
+                  <p>{APPLY_MODAL_TEXT.safetyIntro}</p>
+                  <ul>
+                    {APPLY_MODAL_TEXT.safetyItems.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                  <div className="job-apply-tip">
+                    <strong>{APPLY_MODAL_TEXT.resumeTipTitle}</strong>
+                    <p>{APPLY_MODAL_TEXT.resumeTip}</p>
+                  </div>
+                </aside>
               </div>
               <div className="modal-footer border-top-0">
                 <button
