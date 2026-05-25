@@ -298,6 +298,24 @@
   font-weight: 800;
 }
 
+.talent-reasons {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  max-width: 220px;
+}
+
+.talent-reasons span {
+  padding: 6px 9px;
+  border-radius: 999px;
+  background: #f0fdfa;
+  color: #0f766e;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-align: right;
+}
+
 .talent-contact-link {
   max-width: 100%;
   overflow-wrap: anywhere;
@@ -449,6 +467,25 @@
   margin-top: 20px;
 }
 
+.talent-billing-lock {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border-color: rgba(14, 165, 233, 0.22);
+  background: #f0f9ff;
+}
+
+.talent-billing-lock h2 {
+  margin: 0 0 6px;
+  color: #075985;
+}
+
+.talent-billing-lock p {
+  margin: 0;
+  color: #475569;
+}
+
 @media (max-width: 1200px) {
   .talent-filter-grid,
   .talent-recommend-grid {
@@ -473,7 +510,8 @@
 
 @media (max-width: 760px) {
   .talent-hero,
-  .talent-panel__head {
+  .talent-panel__head,
+  .talent-billing-lock {
     flex-direction: column;
   }
 

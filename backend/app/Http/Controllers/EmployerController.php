@@ -5,8 +5,13 @@ namespace App\Http\Controllers;
 use App\Events\NotifyCandidateEvent;
 use App\Models\Candidate;
 use App\Models\CandidateMessage;
+use App\Models\CompanyBranch;
 use App\Models\Employer;
 use App\Models\Job;
+use App\Services\CandidateMatchingService;
+use App\Services\CompanyAccessService;
+use App\Services\EmployerBillingService;
+use App\Services\GoogleMapLinkResolver;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -17,6 +22,11 @@ use Illuminate\Support\Str;
 
 class EmployerController extends Controller
 {
+    public function me(CompanyAccessService $access)
+    {
+        return response()->json($access->companyPayload());
+    }
+
     public function index(Request $request)
     {
         $keyw = $request->query('keyword');
@@ -106,18 +116,19 @@ class EmployerController extends Controller
         return $jobs;
     }
 
-    public function getDashboard()
+    public function getDashboard(CompanyAccessService $access)
     {
-        $userId = Auth::id();
-        $employer = Employer::where('user_id', $userId)->first();
+        $member = $access->requireMember();
+        $employer = Employer::where('id', $member->employer_id)->first();
 
         if (!$employer) {
             return response()->json(['message' => 'resource not found'], 404);
         }
 
-        $jobIds = Job::where('employer_id', $userId)->pluck('id');
-        $totalJobs = Job::where('employer_id', $userId)->count();
-        $activeJobs = Job::where('employer_id', $userId)->where('is_active', 1)->count();
+        $jobScope = $access->scopedJobQuery($member);
+        $jobIds = (clone $jobScope)->pluck('id');
+        $totalJobs = (clone $jobScope)->count();
+        $activeJobs = (clone $jobScope)->where('is_active', 1)->count();
         $inactiveJobs = $totalJobs - $activeJobs;
 
         $baseApplyingQuery = DB::table('job_applying')->whereIn('job_id', $jobIds);
@@ -150,7 +161,7 @@ class EmployerController extends Controller
             })
             ->values();
 
-        $jobPerformance = Job::where('employer_id', $userId)
+        $jobPerformance = $access->scopedJobQuery($member)
             ->leftJoin('job_applying', 'jobs.id', '=', 'job_applying.job_id')
             ->selectRaw('jobs.id, jobs.jname, jobs.is_active, COUNT(job_applying.candidate_id) as total_applications')
             ->groupBy('jobs.id', 'jobs.jname', 'jobs.is_active')
@@ -159,8 +170,17 @@ class EmployerController extends Controller
             ->take(5)
             ->get();
 
+        $visibleBranches = $access->visibleBranches($member)->values();
+        $workspaceLocation = $member->isCompanyWide()
+            ? $employer
+            : ($member->branch ?: $visibleBranches->first());
+        $branchSummaries = $this->branchDashboardSummaries($visibleBranches, $member->employer_id);
+
         return response()->json([
             'employer' => $employer,
+            'branch' => $member->branch,
+            'workspace_location' => $workspaceLocation,
+            'profile_scope' => $member->isCompanyWide() ? 'company' : 'branch',
             'stats' => [
                 'total_jobs' => $totalJobs,
                 'active_jobs' => $activeJobs,
@@ -179,12 +199,97 @@ class EmployerController extends Controller
                 ['label' => 'Loại', 'value' => $rejectedApplications, 'tone' => '#ef4444'],
             ],
             'job_performance' => $jobPerformance,
+            'branches' => $visibleBranches,
+            'branch_summaries' => $branchSummaries,
+            'branch_stats' => [
+                'total' => $branchSummaries->count(),
+                'active' => $branchSummaries->where('is_active', true)->count(),
+                'with_jobs' => $branchSummaries->where('total_jobs', '>', 0)->count(),
+                'without_location' => $branchSummaries->filter(fn ($branch) =>
+                    $branch['map_lat'] === null || $branch['map_lat'] === '' ||
+                    $branch['map_lng'] === null || $branch['map_lng'] === ''
+                )->count(),
+                'total_members' => $branchSummaries->sum('total_members'),
+            ],
+            'member' => $member,
+            'permissions' => $access->permissionsFor($member),
         ]);
     }
 
-    public function updateCurrent(Request $req)
+    private function branchDashboardSummaries($branches, int $employerId)
     {
-        $employer = Employer::where('user_id', Auth::id())->first();
+        $branchIds = $branches->pluck('id')->filter()->values();
+
+        if ($branchIds->isEmpty()) {
+            return collect();
+        }
+
+        $jobStats = Job::query()
+            ->selectRaw('branch_id, COUNT(*) as total_jobs, SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) as active_jobs')
+            ->where('employer_id', $employerId)
+            ->whereIn('branch_id', $branchIds)
+            ->groupBy('branch_id')
+            ->get()
+            ->keyBy('branch_id');
+
+        $applicationStats = DB::table('jobs')
+            ->leftJoin('job_applying', 'jobs.id', '=', 'job_applying.job_id')
+            ->selectRaw(
+                "jobs.branch_id,
+                COUNT(job_applying.candidate_id) as total_applications,
+                SUM(CASE WHEN job_applying.status IN ('WAITING', 'BROWSING_RESUME') THEN 1 ELSE 0 END) as waiting_applications"
+            )
+            ->where('jobs.employer_id', $employerId)
+            ->whereIn('jobs.branch_id', $branchIds)
+            ->groupBy('jobs.branch_id')
+            ->get()
+            ->keyBy('branch_id');
+
+        $memberStats = DB::table('company_members')
+            ->selectRaw(
+                "branch_id,
+                COUNT(*) as total_members,
+                SUM(CASE WHEN role = 'branch_manager' THEN 1 ELSE 0 END) as branch_managers,
+                SUM(CASE WHEN role = 'branch_hr' THEN 1 ELSE 0 END) as branch_hr"
+            )
+            ->where('employer_id', $employerId)
+            ->where('status', 'active')
+            ->whereIn('branch_id', $branchIds)
+            ->groupBy('branch_id')
+            ->get()
+            ->keyBy('branch_id');
+
+        return $branches->map(function ($branch) use ($jobStats, $applicationStats, $memberStats) {
+            $jobStat = $jobStats->get($branch->id);
+            $applicationStat = $applicationStats->get($branch->id);
+            $memberStat = $memberStats->get($branch->id);
+
+            return [
+                'id' => $branch->id,
+                'name' => $branch->name,
+                'address' => $branch->address,
+                'contact_name' => $branch->contact_name,
+                'phone' => $branch->phone,
+                'map_lat' => $branch->map_lat,
+                'map_lng' => $branch->map_lng,
+                'is_headquarters' => (bool) $branch->is_headquarters,
+                'is_active' => (bool) $branch->is_active,
+                'total_jobs' => (int) ($jobStat->total_jobs ?? 0),
+                'active_jobs' => (int) ($jobStat->active_jobs ?? 0),
+                'total_applications' => (int) ($applicationStat->total_applications ?? 0),
+                'waiting_applications' => (int) ($applicationStat->waiting_applications ?? 0),
+                'total_members' => (int) ($memberStat->total_members ?? 0),
+                'branch_managers' => (int) ($memberStat->branch_managers ?? 0),
+                'branch_hr' => (int) ($memberStat->branch_hr ?? 0),
+            ];
+        })->values();
+    }
+
+    public function updateCurrent(Request $req, CompanyAccessService $access)
+    {
+        $member = $access->requireCompanyOwner();
+        $access->requireActiveSubscription($member);
+        $employer = Employer::where('id', $member->employer_id)->first();
         if (!$employer) {
             return response()->json(['message' => 'resource not found'], 404);
         }
@@ -237,18 +342,20 @@ class EmployerController extends Controller
             );
         }
 
+        $before = $employer->toArray();
         $employer->update($updateFields);
+        $access->log('company.updated', Employer::class, $employer->id, $before, $employer->fresh()->toArray());
 
         return response()->json($employer->fresh());
     }
 
-    public function resolveSharedMapLink(Request $request)
+    public function resolveSharedMapLink(Request $request, GoogleMapLinkResolver $mapResolver)
     {
         $request->validate([
             'url' => 'required|string|max:1000',
         ]);
 
-        $resolved = $this->resolveGoogleMapUrl($request->input('url'));
+        $resolved = $mapResolver->resolve($request->input('url'));
 
         if (!$resolved) {
             return response()->json([
@@ -259,12 +366,14 @@ class EmployerController extends Controller
         return response()->json($resolved);
     }
 
-    public function getCandidateList(Request $req)
+    public function getCandidateList(Request $req, CompanyAccessService $access)
     {
-        $job_ids = Job::where('employer_id', '=', Auth::user()->id)->pluck('id');
+        $member = $access->requirePermission('view_applications');
+        $job_ids = $access->scopedJobQuery($member)->pluck('id');
         $keyword = $req->query('keyword');
+        $perPage = min((int) $req->query('per_page', 20), 50);
 
-        if ($req->status == 'WAITING' || $req->status == 'BROWSING_RESUME') {
+        if ($req->status == 'WAITING' || $req->status == 'BROWSING_RESUME' || !$req->status) {
             $status = ['WAITING', 'BROWSING_RESUME'];
         } else {
             $status[] = $req->status;
@@ -273,7 +382,8 @@ class EmployerController extends Controller
         $candidates = DB::table('job_applying')
             ->join('jobs', 'job_id', '=', 'jobs.id')
             ->join('candidates', 'candidate_id', '=', 'candidates.id')
-            ->whereIn('status', $status)
+            ->leftJoin('company_branches', 'jobs.branch_id', '=', 'company_branches.id')
+            ->whereIn('job_applying.status', $status)
             ->whereIn('job_id', $job_ids)
             ->when($keyword != null, function ($query) use ($keyword) {
                 return $query->where(function ($query2) use ($keyword) {
@@ -282,75 +392,50 @@ class EmployerController extends Controller
                         ->orWhereRaw("LOWER(CONCAT(lastname, ' ', firstname)) LIKE ?", ['%' . strtolower($keyword) . '%']);
                 });
             })
-            ->selectRaw('job_applying.*, candidates.*, jobs.id, jobs.jname,
+            ->selectRaw('job_applying.*, candidates.*, jobs.id as job_id, jobs.jname,
+                        company_branches.name as branch_name,
                         DATE_FORMAT(job_applying.created_at, "%d/%m/%Y %H:%i") as appliedTime')
             ->orderByDesc('job_applying.created_at')
-            ->get();
+            ->paginate($perPage);
 
         return response()->json($candidates);
     }
 
-    public function getRecommendedCandidates($job_id)
+    public function getRecommendedCandidates($job_id, CompanyAccessService $access, CandidateMatchingService $matching)
     {
-        $job = Job::with('skills')->where([
-            ['id', '=', $job_id],
-            ['employer_id', '=', Auth::id()],
-        ])->firstOrFail();
-
-        $requiredSkills = $job->skills
-            ->pluck('name')
-            ->map(fn ($name) => strtolower(trim($name)))
-            ->filter()
-            ->values();
-
-        if ($requiredSkills->isEmpty()) {
-            return response()->json([]);
+        $access->requirePermission('search_candidates');
+        $billingAccess = $this->requirePaidEmployerFeature('candidate_search');
+        if ($billingAccess) {
+            return $billingAccess;
         }
 
-        $candidates = Candidate::query()
-            ->with(['skills' => function ($query) {
-                $query->whereNull('resume_id');
-            }])
-            ->whereHas('skills', function ($query) use ($requiredSkills) {
-                $query->whereNull('resume_id')
-                    ->whereIn(DB::raw('LOWER(name)'), $requiredSkills->toArray());
-            })
-            ->get()
-            ->map(function ($candidate) use ($requiredSkills) {
-                $candidateSkills = $candidate->skills
-                    ->pluck('name')
-                    ->filter()
-                    ->values();
+        $job = $access->assertCanAccessJob((int) $job_id);
 
-                $matchedSkills = $candidateSkills
-                    ->filter(fn ($name) => $requiredSkills->contains(strtolower(trim($name))))
-                    ->unique()
-                    ->values();
-
-                return [
-                    'id' => $candidate->id,
-                    'firstname' => $candidate->firstname,
-                    'lastname' => $candidate->lastname,
-                    'email' => $candidate->email,
-                    'phone' => $candidate->phone,
-                    'skills' => $candidateSkills,
-                    'matched_skills' => $matchedSkills,
-                    'match_count' => $matchedSkills->count(),
-                    'match_percent' => round(($matchedSkills->count() / max($requiredSkills->count(), 1)) * 100),
-                ];
-            })
-            ->sortByDesc('match_count')
-            ->values();
-
-        return response()->json($candidates);
+        return response()->json($matching->rankForJob($job, 24)->map(function ($match) use ($job) {
+            $match['job'] = [
+                'id' => $job->id,
+                'jname' => $job->jname,
+                'amount' => $job->amount,
+                'yoe' => $job->yoe,
+                'branch_name' => $job->branch?->name,
+            ];
+            return $match;
+        })->values());
     }
 
-    public function searchCandidates(Request $req)
+    public function searchCandidates(Request $req, CompanyAccessService $access, CandidateMatchingService $matching)
     {
+        $member = $access->requirePermission('search_candidates');
+        $billingAccess = $this->requirePaidEmployerFeature('candidate_search');
+        if ($billingAccess) {
+            return $billingAccess;
+        }
+
         $keyword = trim((string) $req->query('keyword', ''));
         $skillIds = $req->query('skill_ids', []);
         $skillIds = is_array($skillIds) ? $skillIds : [$skillIds];
         $jobId = $req->query('job_id');
+        $perPage = min((int) $req->query('per_page', 20), 50);
 
         $skillNames = collect();
         if (count($skillIds) > 0) {
@@ -362,31 +447,19 @@ class EmployerController extends Controller
                 ->values();
         }
 
-        $requiredSkills = collect();
+        $job = null;
         if ($jobId) {
-            $job = Job::with('skills')->where([
-                ['id', '=', $jobId],
-                ['employer_id', '=', Auth::id()],
-            ])->first();
-
-            if ($job) {
-                $requiredSkills = $job->skills
-                    ->pluck('name')
-                    ->map(fn ($name) => strtolower(trim($name)))
-                    ->filter()
-                    ->values();
-            }
+            $job = $access->assertCanAccessJob((int) $jobId);
+        } else {
+            $job = $access->scopedJobQuery($member)
+                ->with(['skills', 'industries', 'branch', 'jtype', 'jlevel'])
+                ->where('is_active', 1)
+                ->whereHas('skills')
+                ->orderByDesc('updated_at')
+                ->first();
         }
 
-        $candidates = Candidate::query()
-            ->with([
-                'skills' => fn ($query) => $query->whereNull('resume_id'),
-                'educations' => fn ($query) => $query->whereNull('resume_id'),
-                'experiences' => fn ($query) => $query->whereNull('resume_id'),
-                'projects' => fn ($query) => $query->whereNull('resume_id'),
-                'certificates' => fn ($query) => $query->whereNull('resume_id'),
-                'prizes' => fn ($query) => $query->whereNull('resume_id'),
-            ])
+        $candidateQuery = Candidate::query()
             ->when($keyword !== '', function ($query) use ($keyword) {
                 $like = '%' . strtolower($keyword) . '%';
                 $query->where(function ($subQuery) use ($like) {
@@ -466,142 +539,94 @@ class EmployerController extends Controller
             ->when($req->boolean('has_location'), fn ($query) => $query
                 ->whereNotNull('map_lat')
                 ->whereNotNull('map_lng'))
-            ->orderByDesc('updated_at')
-            ->limit(60)
-            ->get()
-            ->map(function ($candidate) use ($requiredSkills) {
-                $candidateSkills = $candidate->skills->pluck('name')->filter()->values();
-                $matchedSkills = $requiredSkills->isEmpty()
-                    ? collect()
-                    : $candidateSkills
-                        ->filter(fn ($name) => $requiredSkills->contains(strtolower(trim($name))))
-                        ->unique()
-                        ->values();
+            ->orderByDesc('updated_at');
 
-                return [
-                    'id' => $candidate->id,
-                    'firstname' => $candidate->firstname,
-                    'lastname' => $candidate->lastname,
-                    'gender' => $candidate->gender,
-                    'dob' => $candidate->dob,
-                    'phone' => $candidate->phone,
-                    'email' => $candidate->email,
-                    'address' => $candidate->address,
-                    'objective' => $candidate->objective,
-                    'avatar' => $candidate->avatar,
-                    'link' => $candidate->link,
-                    'skills' => $candidateSkills,
-                    'matched_skills' => $matchedSkills,
-                    'match_count' => $matchedSkills->count(),
-                    'match_percent' => $requiredSkills->isEmpty()
-                        ? null
-                        : round(($matchedSkills->count() / max($requiredSkills->count(), 1)) * 100),
-                    'educations' => $candidate->educations,
-                    'experiences' => $candidate->experiences,
-                    'projects' => $candidate->projects,
-                    'certificates' => $candidate->certificates,
-                    'prizes' => $candidate->prizes,
-                ];
-            })
-            ->sortByDesc('match_count')
-            ->values();
+        if ($job) {
+            return response()->json($matching->searchAndRank($job, $candidateQuery, $perPage));
+        }
 
-        return response()->json($candidates);
+        $paginator = $candidateQuery
+            ->with([
+                'skills' => fn ($query) => $query->whereNull('resume_id'),
+                'educations' => fn ($query) => $query->whereNull('resume_id'),
+                'experiences' => fn ($query) => $query->whereNull('resume_id'),
+                'projects' => fn ($query) => $query->whereNull('resume_id'),
+                'certificates' => fn ($query) => $query->whereNull('resume_id'),
+                'prizes' => fn ($query) => $query->whereNull('resume_id'),
+            ])
+            ->paginate($perPage);
+
+        return response()->json([
+            'data' => collect($paginator->items())->map(fn ($candidate) => [
+                'score' => null,
+                'match_percent' => null,
+                'reasons' => ['Chọn một tin tuyển dụng để hệ thống tính điểm phù hợp.'],
+                'candidate' => $this->serializeCandidateLite($candidate),
+                'matched_skills' => [],
+                'missing_required_skills' => [],
+                'missing_skills' => [],
+            ])->values(),
+            'pagination' => [
+                'current_page' => $paginator->currentPage(),
+                'last_page' => $paginator->lastPage(),
+                'per_page' => $paginator->perPage(),
+                'total' => $paginator->total(),
+            ],
+        ]);
     }
 
-    public function getTalentRecommendations()
+    public function getTalentRecommendations(CompanyAccessService $access, CandidateMatchingService $matching)
     {
-        $jobs = Job::with('skills')
-            ->where('employer_id', Auth::id())
+        $member = $access->requirePermission('search_candidates');
+        $billingAccess = $this->requirePaidEmployerFeature('candidate_search');
+        if ($billingAccess) {
+            return $billingAccess;
+        }
+
+        $jobs = $access->scopedJobQuery($member)
+            ->with(['skills', 'industries', 'branch', 'jtype', 'jlevel'])
             ->where('is_active', 1)
             ->whereHas('skills')
             ->orderByDesc('updated_at')
+            ->limit(10)
             ->get();
 
         if ($jobs->isEmpty()) {
             return response()->json([]);
         }
 
-        $candidates = Candidate::with([
-            'skills' => fn ($query) => $query->whereNull('resume_id'),
-            'educations' => fn ($query) => $query->whereNull('resume_id'),
-            'experiences' => fn ($query) => $query->whereNull('resume_id'),
-            'projects' => fn ($query) => $query->whereNull('resume_id'),
-            'certificates' => fn ($query) => $query->whereNull('resume_id'),
-        ])->get();
-
         $recommendations = collect();
-
         foreach ($jobs as $job) {
-            $requiredSkills = $job->skills
-                ->pluck('name')
-                ->map(fn ($name) => strtolower(trim($name)))
-                ->filter()
-                ->values();
-
-            if ($requiredSkills->isEmpty()) {
-                continue;
-            }
-
-            foreach ($candidates as $candidate) {
-                $candidateSkills = $candidate->skills->pluck('name')->filter()->values();
-                $matchedSkills = $candidateSkills
-                    ->filter(fn ($name) => $requiredSkills->contains(strtolower(trim($name))))
-                    ->unique()
-                    ->values();
-
-                if ($matchedSkills->isEmpty()) {
-                    continue;
-                }
-
-                $missingSkills = $job->skills
-                    ->pluck('name')
-                    ->filter(fn ($name) => !$matchedSkills->contains($name))
-                    ->values();
-
-                $recommendations->push([
-                    'candidate' => [
-                        'id' => $candidate->id,
-                        'firstname' => $candidate->firstname,
-                        'lastname' => $candidate->lastname,
-                        'gender' => $candidate->gender,
-                        'phone' => $candidate->phone,
-                        'email' => $candidate->email,
-                        'address' => $candidate->address,
-                        'objective' => $candidate->objective,
-                        'avatar' => $candidate->avatar,
-                        'skills' => $candidateSkills,
-                        'educations' => $candidate->educations,
-                        'experiences' => $candidate->experiences,
-                        'projects' => $candidate->projects,
-                        'certificates' => $candidate->certificates,
-                    ],
-                    'job' => [
+            $recommendations = $recommendations->merge(
+                $matching->rankForJob($job, 8)->map(function ($match) use ($job) {
+                    $match['job'] = [
                         'id' => $job->id,
                         'jname' => $job->jname,
                         'amount' => $job->amount,
                         'yoe' => $job->yoe,
-                    ],
-                    'required_skills' => $job->skills->pluck('name')->values(),
-                    'matched_skills' => $matchedSkills,
-                    'missing_skills' => $missingSkills,
-                    'match_count' => $matchedSkills->count(),
-                    'match_percent' => round(($matchedSkills->count() / max($requiredSkills->count(), 1)) * 100),
-                ]);
-            }
+                        'branch_name' => $job->branch?->name,
+                    ];
+                    return $match;
+                })
+            );
         }
 
         return response()->json(
             $recommendations
-                ->sortByDesc('match_percent')
-                ->sortByDesc('match_count')
+                ->sortByDesc('score')
                 ->take(24)
                 ->values()
         );
     }
 
-    public function contactCandidate(Request $req)
+    public function contactCandidate(Request $req, CompanyAccessService $access)
     {
+        $access->requirePermission('search_candidates');
+        $billingAccess = $this->requirePaidEmployerFeature('candidate_search');
+        if ($billingAccess) {
+            return $billingAccess;
+        }
+
         $req->validate([
             'candidate_id' => 'required|integer|exists:candidates,id',
             'job_id' => 'required|integer|exists:jobs,id',
@@ -610,12 +635,9 @@ class EmployerController extends Controller
             'is_send_mail' => 'nullable|boolean',
         ]);
 
-        $job = Job::where([
-            ['id', '=', $req->job_id],
-            ['employer_id', '=', Auth::id()],
-        ])->firstOrFail();
+        $job = $access->assertCanAccessJob((int) $req->job_id);
 
-        $company = Employer::where('user_id', '=', Auth::id())->value('name');
+        $company = Employer::where('id', '=', $job->employer_id)->value('name');
         $messageName = 'Nhà tuyển dụng ' . ($company ?: '') . ' đã liên hệ bạn về vị trí ' . $job->jname;
 
         CandidateMessage::create([
@@ -634,14 +656,21 @@ class EmployerController extends Controller
         }
 
         event(new NotifyCandidateEvent($messageName, $req->candidate_id));
+        $access->log('candidate.contacted', Candidate::class, (int) $req->candidate_id, null, [
+            'job_id' => $job->id,
+            'title' => $req->title,
+            'is_send_mail' => $req->boolean('is_send_mail'),
+        ]);
 
         return response()->json('Sent successfully');
     }
 
-    public function processApplying(Request $req)
+    public function processApplying(Request $req, CompanyAccessService $access)
     {
+        $access->requirePermission('manage_applications');
         $currentTime = Carbon::now()->format('H:i d/m/Y');
-        $company = Employer::where('user_id', '=', Auth::user()->id)->value('name');
+        $job = $access->assertCanAccessJob((int) $req->job_id);
+        $company = Employer::where('id', '=', $job->employer_id)->value('name');
 
         if ($req->actType === 'VIEWED') {
             $nextStatus = 'BROWSING_RESUME';
@@ -671,6 +700,7 @@ class EmployerController extends Controller
                 ['job_id', '=', $req->job_id],
                 ['candidate_id', '=', $req->candidate_id]
             ])
+            ->whereIn('job_id', [$job->id])
             ->update([
                 'status' => $nextStatus,
                 'updated_at' => Carbon::now(),
@@ -679,7 +709,7 @@ class EmployerController extends Controller
         if ($req->actType !== 'VIEWED') {
             CandidateMessage::create([
                 'candidate_id' => $req->candidate_id,
-                'job_id' => $req->job_id,
+                'job_id' => $job->id,
                 'name' => $msgName,
                 'title' => $req->title,
                 'content' => $req->content,
@@ -715,18 +745,24 @@ class EmployerController extends Controller
         }
 
         event(new NotifyCandidateEvent($msgName, $req->candidate_id));
+        $access->log('application.status_changed', 'job_applying', (int) $job->id, null, [
+            'candidate_id' => $req->candidate_id,
+            'status' => $nextStatus,
+        ]);
 
         return response()->json('Updated successfully');
     }
 
-    public function getJobList(Request $req)
+    public function getJobList(Request $req, CompanyAccessService $access)
     {
+        $member = $access->requirePermission('view_jobs');
         $keyword = $req->query('keyword');
-        $jobs = Job::with(['industries', 'locations'])
+        $perPage = min((int) $req->query('per_page', 30), 100);
+        $jobs = $access->scopedJobQuery($member)
+            ->with(['industries', 'locations', 'skills', 'branch'])
             ->join('employers', 'jobs.employer_id', '=', 'employers.id')
-            ->join('jtypes', 'jtype_id', '=', 'jtypes.id')
-            ->join('jlevels', 'jlevel_id', '=', 'jlevels.id')
-            ->where('employer_id', '=', $req->id)
+            ->leftJoin('jtypes', 'jtype_id', '=', 'jtypes.id')
+            ->leftJoin('jlevels', 'jlevel_id', '=', 'jlevels.id')
             ->where('employers.is_active', 1)
             ->when($keyword != null, function ($query) use ($keyword) {
                 return $query->where(function ($query2) use ($keyword) {
@@ -739,15 +775,22 @@ class EmployerController extends Controller
                         DATE_FORMAT(jobs.created_at ,"%d/%m/%Y %H:%i") as postTime,
                         DATE_FORMAT(expire_at ,"%d/%m/%Y") as deadline')
             ->orderByDesc('jobs.created_at')
-            ->get();
+            ->paginate($perPage);
 
         return response()->json($jobs);
     }
 
-    public function changeJobStatus(Request $req)
+    public function changeJobStatus(Request $req, CompanyAccessService $access)
     {
-        Job::where('id', $req->job_id)
-            ->update(['is_active' => $req->status]);
+        $access->requirePermission('manage_jobs');
+        $job = $access->assertCanAccessJob((int) $req->job_id);
+        $before = $job->toArray();
+        $status = (int) $req->status;
+        $job->update([
+            'is_active' => $status,
+            'status' => $status ? 'active' : 'paused',
+        ]);
+        $access->log('job.status_changed', Job::class, $job->id, $before, $job->fresh()->toArray());
 
         return response()->json('Updated successfully');
     }
@@ -759,6 +802,45 @@ class EmployerController extends Controller
         }
 
         return (int) $value;
+    }
+
+    private function requirePaidEmployerFeature(string $feature)
+    {
+        $access = app(EmployerBillingService::class)->checkAccessForEmployerUser(Auth::id(), $feature);
+        if ($access['allowed']) {
+            return null;
+        }
+
+        return response()->json([
+            'message' => $access['message'],
+            'code' => $access['code'],
+            'billing_url' => '/employer/billing',
+        ], 402);
+    }
+
+    private function serializeCandidateLite(Candidate $candidate): array
+    {
+        return [
+            'id' => $candidate->id,
+            'firstname' => $candidate->firstname,
+            'lastname' => $candidate->lastname,
+            'gender' => $candidate->gender,
+            'dob' => $candidate->dob,
+            'phone' => $candidate->phone,
+            'email' => $candidate->email,
+            'address' => $candidate->address,
+            'map_lat' => $candidate->map_lat,
+            'map_lng' => $candidate->map_lng,
+            'objective' => $candidate->objective,
+            'avatar' => $candidate->avatar,
+            'link' => $candidate->link,
+            'skills' => $candidate->skills->pluck('name')->filter()->values(),
+            'educations' => $candidate->educations,
+            'experiences' => $candidate->experiences,
+            'projects' => $candidate->projects,
+            'certificates' => $candidate->certificates,
+            'prizes' => $candidate->prizes,
+        ];
     }
 
     private function nullableCoordinate($value, $fallback = null)

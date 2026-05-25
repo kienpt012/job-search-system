@@ -9,15 +9,27 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('candidates', function (Blueprint $table) {
-            $table->decimal('map_lat', 10, 7)->nullable()->after('address');
-            $table->decimal('map_lng', 10, 7)->nullable()->after('map_lat');
+            if (!Schema::hasColumn('candidates', 'map_lat')) {
+                $table->decimal('map_lat', 10, 7)->nullable()->after('address');
+            }
+
+            if (!Schema::hasColumn('candidates', 'map_lng')) {
+                $table->decimal('map_lng', 10, 7)->nullable()->after('map_lat');
+            }
         });
     }
 
     public function down(): void
     {
         Schema::table('candidates', function (Blueprint $table) {
-            $table->dropColumn(['map_lat', 'map_lng']);
+            $dropColumns = array_values(array_filter([
+                Schema::hasColumn('candidates', 'map_lat') ? 'map_lat' : null,
+                Schema::hasColumn('candidates', 'map_lng') ? 'map_lng' : null,
+            ]));
+
+            if (count($dropColumns) > 0) {
+                $table->dropColumn($dropColumns);
+            }
         });
     }
 };

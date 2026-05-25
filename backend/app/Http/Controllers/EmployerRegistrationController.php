@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Employer;
 use App\Models\EmployerRegistration;
 use App\Models\User;
+use App\Services\CompanyAccessService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -91,7 +92,7 @@ class EmployerRegistrationController extends Controller
                 'is_active' => 1,
             ]);
 
-            Employer::create([
+            $employer = Employer::create([
                 'id' => $user->id,
                 'user_id' => $user->id,
                 'name' => $registration->company_name,
@@ -108,6 +109,8 @@ class EmployerRegistrationController extends Controller
                 'is_active' => 1,
             ]);
 
+            app(CompanyAccessService::class)->ensureOwnerMemberForEmployer($employer);
+
             $this->sendApprovedMail($registration, $defaultPassword);
 
             $registration->update([
@@ -116,6 +119,15 @@ class EmployerRegistrationController extends Controller
                 'approved_user_id' => $user->id,
                 'approved_at' => now(),
             ]);
+
+            app(CompanyAccessService::class)->log(
+                'employer_registration.approved',
+                EmployerRegistration::class,
+                $registration->id,
+                null,
+                ['approved_user_id' => $user->id, 'employer_id' => $employer->id],
+                'Admin duyệt hồ sơ, công ty cần thanh toán để mở đầy đủ quyền quản trị.'
+            );
 
             return $user;
         });

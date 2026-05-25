@@ -4,9 +4,11 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use App\Models\Candidate;
+use App\Models\Employer;
 use App\Models\Jskill;
 use App\Models\Skill;
 use App\Models\User;
+use App\Services\CompanyAccessService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
@@ -44,8 +46,14 @@ class AuthController extends Controller
             ], 403);
         }
 
-        if ((int) $request->role === 1) {
+        $requestedRole = (int) $request->role;
+
+        if ($requestedRole === 1) {
             $user = $this->buildCandidateAuthPayload($user);
+        }
+
+        if ($requestedRole === 2) {
+            $user = $this->buildEmployerAuthPayload($user);
         }
 
         return response()->json([
@@ -108,11 +116,13 @@ class AuthController extends Controller
             ], 401);
         }
 
-        if ((int) $user->role === 2) {
-            $user = User::with('employer')->find($user->id);
+        $role = (int) $user->role;
+
+        if ($role === 2) {
+            $user = $this->buildEmployerAuthPayload($user);
         }
 
-        if ((int) $user->role === 1) {
+        if ($role === 1) {
             $user = $this->buildCandidateAuthPayload($user);
         }
 
@@ -131,8 +141,14 @@ class AuthController extends Controller
     public function refresh()
     {
         $user = Auth::user();
-        if ($user && (int) $user->role === 1) {
+        $role = $user ? (int) $user->role : null;
+
+        if ($role === 1) {
             $user = $this->buildCandidateAuthPayload($user);
+        }
+
+        if ($role === 2) {
+            $user = $this->buildEmployerAuthPayload($user);
         }
 
         return response()->json([
@@ -155,6 +171,39 @@ class AuthController extends Controller
         $payload = $candidate->toArray();
         $payload['role'] = $user->role;
         $payload['is_active'] = $user->is_active;
+
+        return $payload;
+    }
+
+    private function buildEmployerAuthPayload($user)
+    {
+        $access = app(CompanyAccessService::class);
+        $member = $access->currentMember($user->id);
+
+        if (!$member) {
+            $employer = Employer::where('user_id', $user->id)->first();
+            if ($employer) {
+                $member = $access->ensureOwnerMemberForEmployer($employer);
+            }
+        }
+
+        if (!$member) {
+            return User::with('employer')->find($user->id);
+        }
+
+        $payload = User::with([
+            'companyMember.employer',
+            'companyMember.branch',
+        ])->find($user->id)->toArray();
+
+        $companyPayload = $access->companyPayload($member);
+        $payload['employer'] = $companyPayload['employer'];
+        $payload['company'] = $companyPayload['company'];
+        $payload['company_member'] = $companyPayload['member'];
+        $payload['member'] = $companyPayload['member'];
+        $payload['branch'] = $companyPayload['branch'];
+        $payload['branches'] = $companyPayload['branches'];
+        $payload['permissions'] = $companyPayload['permissions'];
 
         return $payload;
     }

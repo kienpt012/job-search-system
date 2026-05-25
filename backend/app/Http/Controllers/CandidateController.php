@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Candidate;
 use App\Models\Employer;
 use App\Models\Job;
+use App\Services\GoogleMapLinkResolver;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -140,13 +141,13 @@ class CandidateController extends Controller
         return response()->json('updated successfully');
     }
 
-    public function resolveSharedMapLink(Request $request)
+    public function resolveSharedMapLink(Request $request, GoogleMapLinkResolver $mapResolver)
     {
         $request->validate([
             'url' => 'required|string|max:1000',
         ]);
 
-        $resolved = $this->resolveGoogleMapUrl($request->input('url'));
+        $resolved = $mapResolver->resolve($request->input('url'));
 
         if (!$resolved) {
             return response()->json([

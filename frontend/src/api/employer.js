@@ -18,6 +18,33 @@ const employerApi = {
   getDashboard: () => {
     return employerAxios.get(`${prefix}/dashboard`);
   },
+  getMe: () => {
+    return employerAxios.get("/employer/me");
+  },
+  getBranches: () => {
+    return employerAxios.get("/employer/branches");
+  },
+  createBranch: (data) => {
+    return employerAxios.post("/employer/branches", data);
+  },
+  updateBranch: (id, data) => {
+    return employerAxios.patch(`/employer/branches/${id}`, data);
+  },
+  deleteBranch: (id) => {
+    return employerAxios.delete(`/employer/branches/${id}`);
+  },
+  getMembers: () => {
+    return employerAxios.get("/employer/members");
+  },
+  createMember: (data) => {
+    return employerAxios.post("/employer/members", data);
+  },
+  updateMember: (id, data) => {
+    return employerAxios.patch(`/employer/members/${id}`, data);
+  },
+  deleteMember: (id) => {
+    return employerAxios.delete(`/employer/members/${id}`);
+  },
   updateCurrent: (formData) => {
     return employerAxios.post(`${prefix}/updateCurrent`, formData);
   },
@@ -33,11 +60,19 @@ const employerApi = {
   getComJobs: (id) => {
     return commonAxios.get(`${prefix}/${id}/getComJobs`);
   },
-  getJobList: (id, keyword) => {
-    return commonAxios.get(`${prefix}/${id}/getJobList?keyword=${keyword}`);
+  getJobList: (id, keyword, params = {}) => {
+    const query = queryString.stringify(
+      { keyword: keyword || "", ...params },
+      { arrayFormat: "index" }
+    );
+    return employerAxios.get(`/employer/jobs?${query}`);
   },
-  getCandidateList: (keyword, status) => {
-    let url = `${prefix}/getCandidateList?keyword=${keyword}&status=${status}`;
+  getCandidateList: (keyword, status, params = {}) => {
+    const query = queryString.stringify(
+      { keyword: keyword || "", status: status || "", ...params },
+      { arrayFormat: "index" }
+    );
+    let url = `${prefix}/getCandidateList?${query}`;
     return employerAxios.get(url);
   },
   searchCandidates: (params) => {

@@ -38,7 +38,9 @@ class ApiConfig extends ChangeNotifier {
 
   static Future<ApiConfig> load() async {
     final prefs = await SharedPreferences.getInstance();
-    return ApiConfig(_normalize(prefs.getString(_prefKey) ?? kDefaultApiBaseUrl));
+    return ApiConfig(
+      _normalize(prefs.getString(_prefKey) ?? kDefaultApiBaseUrl),
+    );
   }
 
   factory ApiConfig.inMemory([String url = kDefaultApiBaseUrl]) {
@@ -110,6 +112,18 @@ class AuthSession extends ChangeNotifier {
     final nested = user['employer'];
     if (nested is Map) return asMap(nested);
     return user;
+  }
+
+  Map<String, dynamic> get employerPermissions => asMap(user['permissions']);
+
+  Map<String, dynamic> get employerMember => asMap(user['member']);
+
+  String get employerRole => textOf(user['role'] ?? employerMember['role']);
+
+  bool canEmployer(String permission) {
+    if (!isEmployer) return false;
+    if (employerPermissions.isEmpty) return false;
+    return boolValue(employerPermissions[permission]);
   }
 
   int? get currentId {
@@ -207,11 +221,7 @@ class ApiClient {
   final ApiConfig config;
   final AuthSession session;
 
-  Future<dynamic> get(
-    String path, {
-    Map<String, dynamic>? query,
-    int? role,
-  }) =>
+  Future<dynamic> get(String path, {Map<String, dynamic>? query, int? role}) =>
       _send('GET', path, query: query, role: role);
 
   Future<dynamic> post(
@@ -219,14 +229,9 @@ class ApiClient {
     Map<String, dynamic>? body,
     Map<String, dynamic>? query,
     int? role,
-  }) =>
-      _send('POST', path, body: body, query: query, role: role);
+  }) => _send('POST', path, body: body, query: query, role: role);
 
-  Future<dynamic> patch(
-    String path, {
-    Map<String, dynamic>? body,
-    int? role,
-  }) =>
+  Future<dynamic> patch(String path, {Map<String, dynamic>? body, int? role}) =>
       _send('PATCH', path, body: body, role: role);
 
   Future<dynamic> delete(String path, {int? role}) =>
@@ -303,7 +308,10 @@ class ApiClient {
       return decoded;
     }
     final message = decoded is Map
-        ? textOf(decoded['message'] ?? decoded['error'], 'Không thể kết nối API')
+        ? textOf(
+            decoded['message'] ?? decoded['error'],
+            'Không thể kết nối API',
+          )
         : textOf(decoded, 'Không thể kết nối API');
     throw ApiException(message, response.statusCode);
   }
@@ -345,7 +353,10 @@ class ApiClient {
     return value.toString();
   }
 
-  void _addMultipartFields(Map<String, String> target, Map<String, dynamic> src) {
+  void _addMultipartFields(
+    Map<String, String> target,
+    Map<String, dynamic> src,
+  ) {
     src.forEach((key, value) {
       if (value == null) return;
       if (value is Iterable) {
@@ -367,16 +378,30 @@ class RecruitmentApi {
 
   final ApiClient client;
 
-  Future<void> login(AuthSession session, int role, String email, String password) async {
-    final res = asMap(await client.post('/login', body: {
-      'email': email,
-      'password': password,
-      'role': role,
-    }));
+  Future<void> login(
+    AuthSession session,
+    int role,
+    String email,
+    String password,
+  ) async {
+    final res = asMap(
+      await client.post(
+        '/login',
+        body: {'email': email, 'password': password, 'role': role},
+      ),
+    );
     final token = textOf(asMap(res['authorization'])['token']);
     if (token.isEmpty) throw ApiException('API không trả token đăng nhập.');
-    final user = asMap(await client.get('/getMe', role: role));
-    await session.setLogin(role: role, token: token, user: user);
+    await session.setLogin(role: role, token: token, user: asMap(res['user']));
+    try {
+      final user = role == 2
+          ? await employerMe()
+          : asMap(await client.get('/getMe', role: role));
+      await session.updateUser(user);
+    } catch (_) {
+      await session.clear();
+      rethrow;
+    }
   }
 
   Future<void> logout(AuthSession session) async {
@@ -394,14 +419,22 @@ class RecruitmentApi {
   Future<dynamic> registerCandidate(Map<String, dynamic> data) =>
       client.post('/register', body: data);
 
-  Future<dynamic> registerEmployer(Map<String, dynamic> fields, List<UploadFile> documents) =>
-      client.multipart(
-        '/employer-registrations',
-        fields: fields,
-        files: documents
-            .map((file) => UploadFile(field: 'documents[]', name: file.name, bytes: file.bytes))
-            .toList(),
-      );
+  Future<dynamic> registerEmployer(
+    Map<String, dynamic> fields,
+    List<UploadFile> documents,
+  ) => client.multipart(
+    '/employer-registrations',
+    fields: fields,
+    files: documents
+        .map(
+          (file) => UploadFile(
+            field: 'documents[]',
+            name: file.name,
+            bytes: file.bytes,
+          ),
+        )
+        .toList(),
+  );
 
   Future<List<Map<String, dynamic>>> industries() async =>
       listFromResponse(await client.get('/industries'), key: 'inf');
@@ -431,20 +464,20 @@ class RecruitmentApi {
     await client.multipart(
       '/jobs/$jobId/apply',
       role: 1,
-      fields: {
-        'id': jobId,
-        'resume_id': resumeId,
-        'fname': cv.name,
-      },
+      fields: {'id': jobId, 'resume_id': resumeId, 'fname': cv.name},
       files: [UploadFile(field: 'cv', name: cv.name, bytes: cv.bytes)],
     );
   }
 
-  Future<bool> checkApplying(int jobId) async =>
-      boolValue(asMap(await client.get('/jobs/$jobId/checkApplying', role: 1))['value']);
+  Future<bool> checkApplying(int jobId) async => boolValue(
+    asMap(await client.get('/jobs/$jobId/checkApplying', role: 1))['value'],
+  );
 
-  Future<bool> checkSaved(int jobId) async =>
-      boolValue(asMap(await client.get('/candidates/$jobId/checkJobSaved', role: 1))['value']);
+  Future<bool> checkSaved(int jobId) async => boolValue(
+    asMap(
+      await client.get('/candidates/$jobId/checkJobSaved', role: 1),
+    )['value'],
+  );
 
   Future<void> setSavedJob(int jobId, bool saved) async {
     await client.post(
@@ -454,8 +487,12 @@ class RecruitmentApi {
     );
   }
 
-  Future<Map<String, dynamic>> companies({String keyword = '', int page = 1}) async =>
-      asMap(await client.get('/companies', query: {'keyword': keyword, 'page': page}));
+  Future<Map<String, dynamic>> companies({
+    String keyword = '',
+    int page = 1,
+  }) async => asMap(
+    await client.get('/companies', query: {'keyword': keyword, 'page': page}),
+  );
 
   Future<Map<String, dynamic>> companyDetail(int id) async =>
       asMap(await client.get('/companies/$id/getByID'));
@@ -472,7 +509,10 @@ class RecruitmentApi {
   Future<Map<String, dynamic>> profileBundle() async =>
       asMap(await client.get('/candidates/profileBundle', role: 1));
 
-  Future<void> updateCandidate(Map<String, dynamic> fields, {UploadFile? image}) async {
+  Future<void> updateCandidate(
+    Map<String, dynamic> fields, {
+    UploadFile? image,
+  }) async {
     if (image == null) {
       await client.post('/candidates/update', role: 1, body: fields);
       return;
@@ -485,46 +525,69 @@ class RecruitmentApi {
     );
   }
 
-  Future<List<Map<String, dynamic>>> candidateAppliedJobs(int candidateId) async =>
-      listFromResponse(await client.get('/candidates/$candidateId/getAppliedJobs', role: 1));
+  Future<List<Map<String, dynamic>>> candidateAppliedJobs(
+    int candidateId,
+  ) async => listFromResponse(
+    await client.get('/candidates/$candidateId/getAppliedJobs', role: 1),
+  );
 
-  Future<List<Map<String, dynamic>>> candidateSavedJobs(int candidateId) async =>
-      listFromResponse(await client.get('/candidates/$candidateId/getSavedJobs', role: 1));
+  Future<List<Map<String, dynamic>>> candidateSavedJobs(
+    int candidateId,
+  ) async => listFromResponse(
+    await client.get('/candidates/$candidateId/getSavedJobs', role: 1),
+  );
 
   Future<Map<String, dynamic>> nearbyCompanies() async =>
       asMap(await client.get('/candidates/nearbyCompanies', role: 1));
 
   Future<List<Map<String, dynamic>>> messages(int candidateId) async =>
-      listFromResponse(await client.get('/cand-msgs/$candidateId/getByCandidateID', role: 1));
+      listFromResponse(
+        await client.get('/cand-msgs/$candidateId/getByCandidateID', role: 1),
+      );
 
   Future<void> markMessageRead(int messageId) async {
     await client.get('/cand-msgs/$messageId/updateReadMsg', role: 1);
   }
 
-  Future<void> sectionCreate(String kind, Map<String, dynamic> data, {UploadFile? image}) async {
+  Future<void> sectionCreate(
+    String kind,
+    Map<String, dynamic> data, {
+    UploadFile? image,
+  }) async {
     final path = '/$kind';
     if (image != null && (kind == 'certificates' || kind == 'prizes')) {
       await client.multipart(
         path,
         role: 1,
         fields: data,
-        files: [UploadFile(field: 'image', name: image.name, bytes: image.bytes)],
+        files: [
+          UploadFile(field: 'image', name: image.name, bytes: image.bytes),
+        ],
       );
       return;
     }
     await client.post(path, role: 1, body: data);
   }
 
-  Future<void> sectionUpdate(String kind, int id, Map<String, dynamic> data, {UploadFile? image}) async {
+  Future<void> sectionUpdate(
+    String kind,
+    int id,
+    Map<String, dynamic> data, {
+    UploadFile? image,
+  }) async {
     data['id'] = id;
     if (kind == 'educations' || kind == 'certificates' || kind == 'prizes') {
-      final path = kind == 'educations' ? '/$kind/update/$id' : '/$kind/update/$id';
+      final path = kind == 'educations'
+          ? '/$kind/update/$id'
+          : '/$kind/update/$id';
       if (image != null && (kind == 'certificates' || kind == 'prizes')) {
         await client.multipart(
           path,
           role: 1,
           fields: data,
-          files: [UploadFile(field: 'image', name: image.name, bytes: image.bytes)],
+          files: [
+            UploadFile(field: 'image', name: image.name, bytes: image.bytes),
+          ],
         );
       } else {
         await client.post(path, role: 1, body: data);
@@ -538,8 +601,9 @@ class RecruitmentApi {
     await client.delete('/$kind/$id', role: 1);
   }
 
-  Future<List<Map<String, dynamic>>> resumes() async =>
-      listFromResponse(await client.get('/resumes/getByCurrentCandidate', role: 1));
+  Future<List<Map<String, dynamic>>> resumes() async => listFromResponse(
+    await client.get('/resumes/getByCurrentCandidate', role: 1),
+  );
 
   Future<Map<String, dynamic>> resumeDetail(int id) async =>
       asMap(await client.get('/resumes/$id/getById', role: 1));
@@ -559,24 +623,120 @@ class RecruitmentApi {
   Future<Map<String, dynamic>> employerDashboard() async =>
       asMap(await client.get('/companies/dashboard', role: 2));
 
+  Future<Map<String, dynamic>> employerMe() async =>
+      asMap(await client.get('/employer/me', role: 2));
+
+  Future<List<Map<String, dynamic>>> employerBranches() async =>
+      listFromResponse(
+        await client.get('/employer/branches', role: 2),
+        key: 'data',
+      );
+
+  Future<Map<String, dynamic>> createBranch(Map<String, dynamic> data) async =>
+      asMap(await client.post('/employer/branches', role: 2, body: data));
+
+  Future<Map<String, dynamic>> updateBranch(
+    int id,
+    Map<String, dynamic> data,
+  ) async =>
+      asMap(await client.patch('/employer/branches/$id', role: 2, body: data));
+
+  Future<void> deleteBranch(int id) async {
+    await client.delete('/employer/branches/$id', role: 2);
+  }
+
+  Future<List<Map<String, dynamic>>> employerMembers() async =>
+      listFromResponse(
+        await client.get('/employer/members', role: 2),
+        key: 'data',
+      );
+
+  Future<Map<String, dynamic>> createMember(Map<String, dynamic> data) async =>
+      asMap(await client.post('/employer/members', role: 2, body: data));
+
+  Future<Map<String, dynamic>> updateMember(
+    int id,
+    Map<String, dynamic> data,
+  ) async =>
+      asMap(await client.patch('/employer/members/$id', role: 2, body: data));
+
+  Future<void> lockMember(int id) async {
+    await client.delete('/employer/members/$id', role: 2);
+  }
+
+  Future<Map<String, dynamic>> employerBillingSummary() async =>
+      asMap(await client.get('/employer/billing/summary', role: 2));
+
+  Future<Map<String, dynamic>> createBillingCheckout(String planKey) async =>
+      asMap(
+        await client.post(
+          '/employer/billing/checkout',
+          role: 2,
+          body: {'plan_key': planKey},
+        ),
+      );
+
+  Future<Map<String, dynamic>> syncBillingPayment(dynamic orderCode) async =>
+      asMap(
+        await client.post(
+          '/employer/billing/payments/$orderCode/sync',
+          role: 2,
+        ),
+      );
+
+  Future<Map<String, dynamic>> resolveEmployerMapLink(String url) async =>
+      asMap(
+        await client.post(
+          '/companies/resolveSharedMapLink',
+          role: 2,
+          body: {'url': url},
+        ),
+      );
+
+  Future<Map<String, dynamic>> resolveCandidateMapLink(String url) async =>
+      asMap(
+        await client.post(
+          '/candidates/resolveSharedMapLink',
+          role: 1,
+          body: {'url': url},
+        ),
+      );
+
   Future<Map<String, dynamic>> updateEmployerProfile(
     Map<String, dynamic> fields, {
     UploadFile? logo,
     UploadFile? image,
   }) async {
     final files = <UploadFile>[];
-    if (logo != null) files.add(UploadFile(field: 'logo', name: logo.name, bytes: logo.bytes));
-    if (image != null) files.add(UploadFile(field: 'image', name: image.name, bytes: image.bytes));
-    if (files.isEmpty) {
-      return asMap(await client.post('/companies/updateCurrent', role: 2, body: fields));
+    if (logo != null) {
+      files.add(UploadFile(field: 'logo', name: logo.name, bytes: logo.bytes));
     }
-    return asMap(await client.multipart('/companies/updateCurrent', role: 2, fields: fields, files: files));
+    if (image != null) {
+      files.add(
+        UploadFile(field: 'image', name: image.name, bytes: image.bytes),
+      );
+    }
+    if (files.isEmpty) {
+      return asMap(
+        await client.post('/companies/updateCurrent', role: 2, body: fields),
+      );
+    }
+    return asMap(
+      await client.multipart(
+        '/companies/updateCurrent',
+        role: 2,
+        fields: fields,
+        files: files,
+      ),
+    );
   }
 
-  Future<List<Map<String, dynamic>>> employerJobs(int employerId, {String keyword = ''}) async =>
-      listFromResponse(await client.get('/companies/$employerId/getJobList', role: 2, query: {
-        'keyword': keyword,
-      }));
+  Future<List<Map<String, dynamic>>> employerJobs({
+    String keyword = '',
+  }) async => listFromResponse(
+    await client.get('/employer/jobs', role: 2, query: {'keyword': keyword}),
+    key: 'data',
+  );
 
   Future<void> createJob(Map<String, dynamic> data) async {
     await client.post('/jobs', role: 2, body: data);
@@ -594,24 +754,41 @@ class RecruitmentApi {
     );
   }
 
-  Future<List<Map<String, dynamic>>> applications({String keyword = '', String status = 'WAITING'}) async =>
-      listFromResponse(await client.get('/companies/getCandidateList', role: 2, query: {
-        'keyword': keyword,
-        'status': status,
-      }));
+  Future<List<Map<String, dynamic>>> applications({
+    String keyword = '',
+    String status = 'WAITING',
+  }) async => listFromResponse(
+    await client.get(
+      '/companies/getCandidateList',
+      role: 2,
+      query: {'keyword': keyword, 'status': status},
+    ),
+    key: 'data',
+  );
 
   Future<void> processApplying(Map<String, dynamic> data) async {
     await client.post('/companies/processApplying', role: 2, body: data);
   }
 
-  Future<List<Map<String, dynamic>>> searchCandidates(Map<String, dynamic> filters) async =>
-      listFromResponse(await client.get('/companies/searchCandidates', role: 2, query: filters));
+  Future<List<Map<String, dynamic>>> searchCandidates(
+    Map<String, dynamic> filters,
+  ) async => listFromResponse(
+    await client.get('/companies/searchCandidates', role: 2, query: filters),
+    key: 'data',
+  );
 
   Future<List<Map<String, dynamic>>> talentRecommendations() async =>
-      listFromResponse(await client.get('/companies/talentRecommendations', role: 2));
+      listFromResponse(
+        await client.get('/companies/talentRecommendations', role: 2),
+      );
 
   Future<List<Map<String, dynamic>>> recommendedCandidates(int jobId) async =>
-      listFromResponse(await client.get('/companies/jobs/$jobId/recommendedCandidates', role: 2));
+      listFromResponse(
+        await client.get(
+          '/companies/jobs/$jobId/recommendedCandidates',
+          role: 2,
+        ),
+      );
 
   Future<void> contactCandidate(Map<String, dynamic> data) async {
     await client.post('/companies/contactCandidate', role: 2, body: data);
@@ -619,7 +796,11 @@ class RecruitmentApi {
 }
 
 class RecruitmentApp extends StatelessWidget {
-  const RecruitmentApp({super.key, required this.config, required this.session});
+  const RecruitmentApp({
+    super.key,
+    required this.config,
+    required this.session,
+  });
 
   final ApiConfig config;
   final AuthSession session;
@@ -634,7 +815,9 @@ class RecruitmentApp extends StatelessWidget {
           title: 'Recruitment Mobile',
           theme: ThemeData(
             useMaterial3: true,
-            colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF0F766E)),
+            colorScheme: ColorScheme.fromSeed(
+              seedColor: const Color(0xFF0F766E),
+            ),
             scaffoldBackgroundColor: const Color(0xFFF7FAF9),
             appBarTheme: const AppBarTheme(
               centerTitle: false,
@@ -653,12 +836,17 @@ class RecruitmentApp extends StatelessWidget {
             inputDecorationTheme: InputDecorationTheme(
               filled: true,
               fillColor: Colors.white,
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
               enabledBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(8),
                 borderSide: const BorderSide(color: Color(0xFFD8E6E2)),
               ),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 12,
+              ),
             ),
           ),
           home: RootShell(config: config, session: session),
@@ -680,8 +868,30 @@ class RootShell extends StatefulWidget {
 
 class _RootShellState extends State<RootShell> {
   int _index = 0;
+  int? _lastRole;
 
-  RecruitmentApi get api => RecruitmentApi(ApiClient(widget.config, widget.session));
+  RecruitmentApi get api =>
+      RecruitmentApi(ApiClient(widget.config, widget.session));
+
+  @override
+  void initState() {
+    super.initState();
+    _hydrateEmployerSession();
+  }
+
+  Future<void> _hydrateEmployerSession() async {
+    if (!widget.session.isEmployer ||
+        widget.session.employerPermissions.isNotEmpty) {
+      return;
+    }
+    try {
+      final payload = await api.employerMe();
+      await widget.session.updateUser(payload);
+      if (mounted) setState(() {});
+    } catch (_) {
+      // Keep the local session; protected screens will show their API error.
+    }
+  }
 
   @override
   void didUpdateWidget(covariant RootShell oldWidget) {
@@ -693,42 +903,172 @@ class _RootShellState extends State<RootShell> {
   List<_NavPage> get _pages {
     if (widget.session.isCandidate) {
       return [
-        _NavPage('Tổng quan', Icons.dashboard_outlined, CandidateDashboardScreen(api: api, session: widget.session, config: widget.config)),
-        _NavPage('Việc làm', Icons.work_outline, JobsScreen(api: api, session: widget.session, config: widget.config)),
-        _NavPage('Hồ sơ', Icons.badge_outlined, CandidateProfileScreen(api: api, session: widget.session, config: widget.config)),
-        _NavPage('Công việc', Icons.bookmark_border, CandidateJobsScreen(api: api, session: widget.session, config: widget.config)),
-        _NavPage('Tin nhắn', Icons.notifications_none, CandidateMessagesScreen(api: api, session: widget.session)),
+        _NavPage(
+          'Tổng quan',
+          Icons.dashboard_outlined,
+          CandidateDashboardScreen(
+            api: api,
+            session: widget.session,
+            config: widget.config,
+          ),
+        ),
+        _NavPage(
+          'Việc làm',
+          Icons.work_outline,
+          JobsScreen(api: api, session: widget.session, config: widget.config),
+        ),
+        _NavPage(
+          'Hồ sơ',
+          Icons.badge_outlined,
+          CandidateProfileScreen(
+            api: api,
+            session: widget.session,
+            config: widget.config,
+          ),
+        ),
+        _NavPage(
+          'Công việc',
+          Icons.bookmark_border,
+          CandidateJobsScreen(
+            api: api,
+            session: widget.session,
+            config: widget.config,
+          ),
+        ),
+        _NavPage(
+          'Tin nhắn',
+          Icons.notifications_none,
+          CandidateMessagesScreen(api: api, session: widget.session),
+        ),
       ];
     }
     if (widget.session.isEmployer) {
-      return [
-        _NavPage('Tổng quan', Icons.dashboard_outlined, EmployerDashboardScreen(api: api, session: widget.session, config: widget.config)),
-        _NavPage('Tin tuyển', Icons.post_add_outlined, EmployerJobsScreen(api: api, session: widget.session)),
-        _NavPage('Ứng viên', Icons.people_outline, EmployerApplicationsScreen(api: api)),
-        _NavPage('Tìm kiếm', Icons.manage_search, EmployerTalentScreen(api: api, session: widget.session, config: widget.config)),
-        _NavPage('Hồ sơ', Icons.business_outlined, EmployerProfileScreen(api: api, session: widget.session, config: widget.config)),
+      final pages = <_NavPage>[
+        _NavPage(
+          'Tổng quan',
+          Icons.dashboard_outlined,
+          EmployerDashboardScreen(
+            api: api,
+            session: widget.session,
+            config: widget.config,
+          ),
+        ),
       ];
+      if (widget.session.canEmployer('view_jobs')) {
+        pages.add(
+          _NavPage(
+            'Tin tuyển',
+            Icons.post_add_outlined,
+            EmployerJobsScreen(api: api, session: widget.session),
+          ),
+        );
+      }
+      if (widget.session.canEmployer('view_applications')) {
+        pages.add(
+          _NavPage(
+            'Ứng viên',
+            Icons.people_outline,
+            EmployerApplicationsScreen(api: api),
+          ),
+        );
+      }
+      if (widget.session.canEmployer('search_candidates')) {
+        pages.add(
+          _NavPage(
+            'Tìm kiếm',
+            Icons.manage_search,
+            EmployerTalentScreen(
+              api: api,
+              session: widget.session,
+              config: widget.config,
+            ),
+          ),
+        );
+      }
+      if (widget.session.canEmployer('view_branches')) {
+        pages.add(
+          _NavPage(
+            'Chi nhánh',
+            Icons.apartment_outlined,
+            EmployerBranchesScreen(api: api, session: widget.session),
+          ),
+        );
+      }
+      if (widget.session.canEmployer('view_members')) {
+        pages.add(
+          _NavPage(
+            'Thành viên',
+            Icons.group_add_outlined,
+            EmployerMembersScreen(api: api, session: widget.session),
+          ),
+        );
+      }
+      if (widget.session.canEmployer('manage_billing')) {
+        pages.add(
+          _NavPage(
+            'Thanh toán',
+            Icons.credit_card_outlined,
+            EmployerBillingScreen(api: api),
+          ),
+        );
+      }
+      if (widget.session.canEmployer('manage_company_profile')) {
+        pages.add(
+          _NavPage(
+            'Hồ sơ',
+            Icons.business_outlined,
+            EmployerProfileScreen(
+              api: api,
+              session: widget.session,
+              config: widget.config,
+            ),
+          ),
+        );
+      }
+      return pages;
     }
     return [
-      _NavPage('Việc làm', Icons.work_outline, JobsScreen(api: api, session: widget.session, config: widget.config)),
-      _NavPage('Công ty', Icons.business_outlined, CompaniesScreen(api: api, config: widget.config)),
-      _NavPage('Tài khoản', Icons.person_outline, AuthScreen(api: api, session: widget.session)),
+      _NavPage(
+        'Việc làm',
+        Icons.work_outline,
+        JobsScreen(api: api, session: widget.session, config: widget.config),
+      ),
+      _NavPage(
+        'Công ty',
+        Icons.business_outlined,
+        CompaniesScreen(api: api, config: widget.config),
+      ),
+      _NavPage(
+        'Tài khoản',
+        Icons.person_outline,
+        AuthScreen(api: api, session: widget.session),
+      ),
     ];
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_lastRole != widget.session.role) {
+      _lastRole = widget.session.role;
+      _index = 0;
+    }
     final pages = _pages;
+    if (_index >= pages.length) _index = 0;
     final active = pages[_index];
     return Scaffold(
       appBar: AppBar(
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Recruitment', style: TextStyle(fontWeight: FontWeight.w800)),
+            const Text(
+              'Recruitment',
+              style: TextStyle(fontWeight: FontWeight.w800),
+            ),
             Text(
               widget.config.baseUrl,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.black54),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: Colors.black54),
             ),
           ],
         ),
@@ -771,7 +1111,12 @@ class _NavPage {
 }
 
 class JobsScreen extends StatefulWidget {
-  const JobsScreen({super.key, required this.api, required this.session, required this.config});
+  const JobsScreen({
+    super.key,
+    required this.api,
+    required this.session,
+    required this.config,
+  });
 
   final RecruitmentApi api;
   final AuthSession session;
@@ -834,14 +1179,14 @@ class _JobsScreenState extends State<JobsScreen> {
   }
 
   Map<String, dynamic> _query({int? page}) => {
-        'page': page ?? _page,
-        'keyword': _keyword.text.trim(),
-        'salary': _salary.text.trim(),
-        'industry_id': _industryId == null ? null : [_industryId],
-        'location_id': _locationId == null ? null : [_locationId],
-        'jtype_id': _jtypeId,
-        'jlevel_id': _jlevelId,
-      };
+    'page': page ?? _page,
+    'keyword': _keyword.text.trim(),
+    'salary': _salary.text.trim(),
+    'industry_id': _industryId == null ? null : [_industryId],
+    'location_id': _locationId == null ? null : [_locationId],
+    'jtype_id': _jtypeId,
+    'jlevel_id': _jlevelId,
+  };
 
   Future<void> _loadJobs({int? page}) async {
     setState(() {
@@ -874,7 +1219,8 @@ class _JobsScreenState extends State<JobsScreen> {
           const PageIntro(
             eyebrow: 'Cơ hội tuyển dụng',
             title: 'Tìm công việc phù hợp',
-            subtitle: 'Lọc nhanh theo ngành nghề, địa điểm, hình thức và cấp bậc.',
+            subtitle:
+                'Lọc nhanh theo ngành nghề, địa điểm, hình thức và cấp bậc.',
           ),
           Card(
             child: Padding(
@@ -897,7 +1243,8 @@ class _JobsScreenState extends State<JobsScreen> {
                           label: 'Ngành',
                           value: _industryId,
                           items: _industries,
-                          onChanged: (value) => setState(() => _industryId = value),
+                          onChanged: (value) =>
+                              setState(() => _industryId = value),
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -906,7 +1253,8 @@ class _JobsScreenState extends State<JobsScreen> {
                           label: 'Địa điểm',
                           value: _locationId,
                           items: _locations,
-                          onChanged: (value) => setState(() => _locationId = value),
+                          onChanged: (value) =>
+                              setState(() => _locationId = value),
                         ),
                       ),
                     ],
@@ -919,7 +1267,8 @@ class _JobsScreenState extends State<JobsScreen> {
                           label: 'Hình thức',
                           value: _jtypeId,
                           items: _jtypes,
-                          onChanged: (value) => setState(() => _jtypeId = value),
+                          onChanged: (value) =>
+                              setState(() => _jtypeId = value),
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -928,7 +1277,8 @@ class _JobsScreenState extends State<JobsScreen> {
                           label: 'Cấp bậc',
                           value: _jlevelId,
                           items: _jlevels,
-                          onChanged: (value) => setState(() => _jlevelId = value),
+                          onChanged: (value) =>
+                              setState(() => _jlevelId = value),
                         ),
                       ),
                     ],
@@ -959,9 +1309,12 @@ class _JobsScreenState extends State<JobsScreen> {
             ),
           ),
           const SizedBox(height: 14),
-          if (_loading) const LoadingList()
-          else if (_error.isNotEmpty) ErrorPanel(message: _error, onRetry: _loadBase)
-          else if (_jobs.isEmpty) const EmptyState(message: 'Không có việc làm phù hợp.')
+          if (_loading)
+            const LoadingList()
+          else if (_error.isNotEmpty)
+            ErrorPanel(message: _error, onRetry: _loadBase)
+          else if (_jobs.isEmpty)
+            const EmptyState(message: 'Không có việc làm phù hợp.')
           else ...[
             for (final job in _jobs)
               JobCard(
@@ -982,7 +1335,9 @@ class _JobsScreenState extends State<JobsScreen> {
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     IconButton.filledTonal(
-                      onPressed: _page > 1 ? () => _loadJobs(page: _page - 1) : null,
+                      onPressed: _page > 1
+                          ? () => _loadJobs(page: _page - 1)
+                          : null,
                       icon: const Icon(Icons.chevron_left),
                     ),
                     Padding(
@@ -990,7 +1345,9 @@ class _JobsScreenState extends State<JobsScreen> {
                       child: Text('Trang $_page / $_lastPage'),
                     ),
                     IconButton.filledTonal(
-                      onPressed: _page < _lastPage ? () => _loadJobs(page: _page + 1) : null,
+                      onPressed: _page < _lastPage
+                          ? () => _loadJobs(page: _page + 1)
+                          : null,
                       icon: const Icon(Icons.chevron_right),
                     ),
                   ],
@@ -1064,19 +1421,30 @@ class _CompaniesScreenState extends State<CompaniesScreen> {
           ),
           TextField(
             controller: _keyword,
-            decoration: const InputDecoration(prefixIcon: Icon(Icons.search), labelText: 'Tìm công ty'),
+            decoration: const InputDecoration(
+              prefixIcon: Icon(Icons.search),
+              labelText: 'Tìm công ty',
+            ),
             onSubmitted: (_) => _load(),
           ),
           const SizedBox(height: 14),
-          if (_loading) const LoadingList()
-          else if (_error.isNotEmpty) ErrorPanel(message: _error, onRetry: _load)
-          else if (_companies.isEmpty) const EmptyState(message: 'Không tìm thấy công ty.')
+          if (_loading)
+            const LoadingList()
+          else if (_error.isNotEmpty)
+            ErrorPanel(message: _error, onRetry: _load)
+          else if (_companies.isEmpty)
+            const EmptyState(message: 'Không tìm thấy công ty.')
           else
             for (final company in _companies)
               CompanyCard(
                 company: company,
                 config: widget.config,
-                onTap: () => showCompanyDetailSheet(context, widget.api, widget.config, intValue(company['id']) ?? 0),
+                onTap: () => showCompanyDetailSheet(
+                  context,
+                  widget.api,
+                  widget.config,
+                  intValue(company['id']) ?? 0,
+                ),
               ),
         ],
       ),
@@ -1094,7 +1462,8 @@ class AuthScreen extends StatefulWidget {
   State<AuthScreen> createState() => _AuthScreenState();
 }
 
-class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateMixin {
+class _AuthScreenState extends State<AuthScreen>
+    with SingleTickerProviderStateMixin {
   late final TabController _tabController;
 
   @override
@@ -1164,7 +1533,12 @@ class _LoginPaneState extends State<LoginPane> {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _loading = true);
     try {
-      await widget.api.login(widget.session, _role, _email.text.trim(), _password.text);
+      await widget.api.login(
+        widget.session,
+        _role,
+        _email.text.trim(),
+        _password.text,
+      );
       showSnack(context, 'Đăng nhập thành công.');
     } catch (error) {
       showSnack(context, error.toString(), isError: true);
@@ -1192,11 +1566,20 @@ class _LoginPaneState extends State<LoginPane> {
                 children: [
                   SegmentedButton<int>(
                     segments: const [
-                      ButtonSegment(value: 1, icon: Icon(Icons.person_outline), label: Text('Ứng viên')),
-                      ButtonSegment(value: 2, icon: Icon(Icons.business_outlined), label: Text('Nhà tuyển dụng')),
+                      ButtonSegment(
+                        value: 1,
+                        icon: Icon(Icons.person_outline),
+                        label: Text('Ứng viên'),
+                      ),
+                      ButtonSegment(
+                        value: 2,
+                        icon: Icon(Icons.business_outlined),
+                        label: Text('Nhà tuyển dụng'),
+                      ),
                     ],
                     selected: {_role},
-                    onSelectionChanged: (value) => setState(() => _role = value.first),
+                    onSelectionChanged: (value) =>
+                        setState(() => _role = value.first),
                   ),
                   const SizedBox(height: 14),
                   TextFormField(
@@ -1218,7 +1601,11 @@ class _LoginPaneState extends State<LoginPane> {
                     child: FilledButton.icon(
                       onPressed: _loading ? null : _submit,
                       icon: _loading
-                          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
                           : const Icon(Icons.login),
                       label: const Text('Đăng nhập'),
                     ),
@@ -1310,17 +1697,42 @@ class _CandidateRegisterPaneState extends State<CandidateRegisterPane> {
                 children: [
                   Row(
                     children: [
-                      Expanded(child: textField(_last, 'Họ', validator: requiredValidator)),
+                      Expanded(
+                        child: textField(
+                          _last,
+                          'Họ',
+                          validator: requiredValidator,
+                        ),
+                      ),
                       const SizedBox(width: 10),
-                      Expanded(child: textField(_first, 'Tên', validator: requiredValidator)),
+                      Expanded(
+                        child: textField(
+                          _first,
+                          'Tên',
+                          validator: requiredValidator,
+                        ),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 10),
-                  textField(_email, 'Email', keyboardType: TextInputType.emailAddress, validator: requiredValidator),
+                  textField(
+                    _email,
+                    'Email',
+                    keyboardType: TextInputType.emailAddress,
+                    validator: requiredValidator,
+                  ),
                   const SizedBox(height: 10),
-                  textField(_password, 'Mật khẩu', obscureText: true, validator: requiredValidator),
+                  textField(
+                    _password,
+                    'Mật khẩu',
+                    obscureText: true,
+                    validator: requiredValidator,
+                  ),
                   const SizedBox(height: 12),
-                  Text('Kỹ năng quan tâm', style: Theme.of(context).textTheme.titleSmall),
+                  Text(
+                    'Kỹ năng quan tâm',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
                   const SizedBox(height: 8),
                   Wrap(
                     spacing: 8,
@@ -1329,12 +1741,16 @@ class _CandidateRegisterPaneState extends State<CandidateRegisterPane> {
                       for (final skill in _skills.take(24))
                         FilterChip(
                           label: Text(textOf(skill['name'])),
-                          selected: _selectedSkills.contains(intValue(skill['id'])),
+                          selected: _selectedSkills.contains(
+                            intValue(skill['id']),
+                          ),
                           onSelected: (selected) {
                             final id = intValue(skill['id']);
                             if (id == null) return;
                             setState(() {
-                              selected ? _selectedSkills.add(id) : _selectedSkills.remove(id);
+                              selected
+                                  ? _selectedSkills.add(id)
+                                  : _selectedSkills.remove(id);
                             });
                           },
                         ),
@@ -1384,7 +1800,17 @@ class _EmployerRegisterPaneState extends State<EmployerRegisterPane> {
 
   @override
   void dispose() {
-    for (final controller in [_email, _company, _address, _contact, _phone, _website, _minEmployees, _maxEmployees, _description]) {
+    for (final controller in [
+      _email,
+      _company,
+      _address,
+      _contact,
+      _phone,
+      _website,
+      _minEmployees,
+      _maxEmployees,
+      _description,
+    ]) {
       controller.dispose();
     }
     super.dispose();
@@ -1401,7 +1827,13 @@ class _EmployerRegisterPaneState extends State<EmployerRegisterPane> {
     setState(() {
       _documents = result.files
           .where((file) => file.bytes != null)
-          .map((file) => UploadFile(field: 'documents[]', name: file.name, bytes: file.bytes!))
+          .map(
+            (file) => UploadFile(
+              field: 'documents[]',
+              name: file.name,
+              bytes: file.bytes!,
+            ),
+          )
           .take(5)
           .toList();
     });
@@ -1410,7 +1842,11 @@ class _EmployerRegisterPaneState extends State<EmployerRegisterPane> {
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     if (_documents.isEmpty) {
-      showSnack(context, 'Cần chọn ít nhất một tài liệu xác minh.', isError: true);
+      showSnack(
+        context,
+        'Cần chọn ít nhất một tài liệu xác minh.',
+        isError: true,
+      );
       return;
     }
     setState(() => _loading = true);
@@ -1426,7 +1862,10 @@ class _EmployerRegisterPaneState extends State<EmployerRegisterPane> {
         'max_employees': _maxEmployees.text.trim(),
         'description': _description.text.trim(),
       }, _documents);
-      showSnack(context, 'Đã gửi yêu cầu đăng ký. Tài khoản sẽ dùng được sau khi admin duyệt.');
+      showSnack(
+        context,
+        'Đã gửi yêu cầu đăng ký. Tài khoản sẽ dùng được sau khi admin duyệt.',
+      );
     } catch (error) {
       showSnack(context, error.toString(), isError: true);
     } finally {
@@ -1442,7 +1881,8 @@ class _EmployerRegisterPaneState extends State<EmployerRegisterPane> {
         const PageIntro(
           eyebrow: 'Nhà tuyển dụng',
           title: 'Gửi yêu cầu mở tài khoản',
-          subtitle: 'Hồ sơ doanh nghiệp cần tài liệu xác minh để admin phê duyệt.',
+          subtitle:
+              'Hồ sơ doanh nghiệp cần tài liệu xác minh để admin phê duyệt.',
         ),
         Form(
           key: _formKey,
@@ -1451,9 +1891,18 @@ class _EmployerRegisterPaneState extends State<EmployerRegisterPane> {
               padding: const EdgeInsets.all(16),
               child: Column(
                 children: [
-                  textField(_email, 'Email đăng nhập', keyboardType: TextInputType.emailAddress, validator: requiredValidator),
+                  textField(
+                    _email,
+                    'Email đăng nhập',
+                    keyboardType: TextInputType.emailAddress,
+                    validator: requiredValidator,
+                  ),
                   const SizedBox(height: 10),
-                  textField(_company, 'Tên công ty', validator: requiredValidator),
+                  textField(
+                    _company,
+                    'Tên công ty',
+                    validator: requiredValidator,
+                  ),
                   const SizedBox(height: 10),
                   textField(_address, 'Địa chỉ', validator: requiredValidator),
                   const SizedBox(height: 10),
@@ -1461,7 +1910,13 @@ class _EmployerRegisterPaneState extends State<EmployerRegisterPane> {
                     children: [
                       Expanded(child: textField(_contact, 'Người liên hệ')),
                       const SizedBox(width: 10),
-                      Expanded(child: textField(_phone, 'Điện thoại', keyboardType: TextInputType.phone)),
+                      Expanded(
+                        child: textField(
+                          _phone,
+                          'Điện thoại',
+                          keyboardType: TextInputType.phone,
+                        ),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 10),
@@ -1469,9 +1924,21 @@ class _EmployerRegisterPaneState extends State<EmployerRegisterPane> {
                   const SizedBox(height: 10),
                   Row(
                     children: [
-                      Expanded(child: textField(_minEmployees, 'Nhân sự từ', keyboardType: TextInputType.number)),
+                      Expanded(
+                        child: textField(
+                          _minEmployees,
+                          'Nhân sự từ',
+                          keyboardType: TextInputType.number,
+                        ),
+                      ),
                       const SizedBox(width: 10),
-                      Expanded(child: textField(_maxEmployees, 'Đến', keyboardType: TextInputType.number)),
+                      Expanded(
+                        child: textField(
+                          _maxEmployees,
+                          'Đến',
+                          keyboardType: TextInputType.number,
+                        ),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 10),
@@ -1480,7 +1947,11 @@ class _EmployerRegisterPaneState extends State<EmployerRegisterPane> {
                   OutlinedButton.icon(
                     onPressed: _pickDocuments,
                     icon: const Icon(Icons.attach_file),
-                    label: Text(_documents.isEmpty ? 'Chọn tài liệu xác minh' : '${_documents.length} tài liệu đã chọn'),
+                    label: Text(
+                      _documents.isEmpty
+                          ? 'Chọn tài liệu xác minh'
+                          : '${_documents.length} tài liệu đã chọn',
+                    ),
                   ),
                   const SizedBox(height: 16),
                   SizedBox(
@@ -1502,14 +1973,20 @@ class _EmployerRegisterPaneState extends State<EmployerRegisterPane> {
 }
 
 class CandidateDashboardScreen extends StatefulWidget {
-  const CandidateDashboardScreen({super.key, required this.api, required this.session, required this.config});
+  const CandidateDashboardScreen({
+    super.key,
+    required this.api,
+    required this.session,
+    required this.config,
+  });
 
   final RecruitmentApi api;
   final AuthSession session;
   final ApiConfig config;
 
   @override
-  State<CandidateDashboardScreen> createState() => _CandidateDashboardScreenState();
+  State<CandidateDashboardScreen> createState() =>
+      _CandidateDashboardScreenState();
 }
 
 class _CandidateDashboardScreenState extends State<CandidateDashboardScreen> {
@@ -1530,7 +2007,10 @@ class _CandidateDashboardScreenState extends State<CandidateDashboardScreen> {
       _error = '';
     });
     try {
-      final results = await Future.wait([widget.api.candidateDashboard(), widget.api.nearbyCompanies()]);
+      final results = await Future.wait([
+        widget.api.candidateDashboard(),
+        widget.api.nearbyCompanies(),
+      ]);
       setState(() {
         _summary = results[0];
         _nearby = results[1];
@@ -1557,8 +2037,10 @@ class _CandidateDashboardScreenState extends State<CandidateDashboardScreen> {
             title: 'Xin chào ${fullName(widget.session.candidate)}',
             subtitle: 'Theo dõi hồ sơ, việc đã ứng tuyển và công ty gần bạn.',
           ),
-          if (_loading) const LoadingList()
-          else if (_error.isNotEmpty) ErrorPanel(message: _error, onRetry: _load)
+          if (_loading)
+            const LoadingList()
+          else if (_error.isNotEmpty)
+            ErrorPanel(message: _error, onRetry: _load)
           else ...[
             GridView.count(
               shrinkWrap: true,
@@ -1568,20 +2050,44 @@ class _CandidateDashboardScreenState extends State<CandidateDashboardScreen> {
               crossAxisSpacing: 10,
               mainAxisSpacing: 10,
               children: [
-                MetricCard(label: 'Đã ứng tuyển', value: textOf(_summary['applied_jobs_count'], '0'), icon: Icons.outbox_outlined),
-                MetricCard(label: 'Đã lưu', value: textOf(_summary['saved_jobs_count'], '0'), icon: Icons.bookmark_border),
-                MetricCard(label: 'CV đã tạo', value: textOf(_summary['resumes_count'], '0'), icon: Icons.description_outlined),
-                MetricCard(label: 'Mục hồ sơ', value: '${sectionCounts.values.fold<int>(0, (sum, value) => sum + (intValue(value) ?? 0))}', icon: Icons.fact_check_outlined),
+                MetricCard(
+                  label: 'Đã ứng tuyển',
+                  value: textOf(_summary['applied_jobs_count'], '0'),
+                  icon: Icons.outbox_outlined,
+                ),
+                MetricCard(
+                  label: 'Đã lưu',
+                  value: textOf(_summary['saved_jobs_count'], '0'),
+                  icon: Icons.bookmark_border,
+                ),
+                MetricCard(
+                  label: 'CV đã tạo',
+                  value: textOf(_summary['resumes_count'], '0'),
+                  icon: Icons.description_outlined,
+                ),
+                MetricCard(
+                  label: 'Mục hồ sơ',
+                  value:
+                      '${sectionCounts.values.fold<int>(0, (sum, value) => sum + (intValue(value) ?? 0))}',
+                  icon: Icons.fact_check_outlined,
+                ),
               ],
             ),
             const SizedBox(height: 14),
-            SectionHeader(title: 'Độ đầy đủ hồ sơ', subtitle: 'Các mục dữ liệu lấy từ profileBundle.'),
+            SectionHeader(
+              title: 'Độ đầy đủ hồ sơ',
+              subtitle: 'Các mục dữ liệu lấy từ profileBundle.',
+            ),
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: [
                 for (final entry in sectionCounts.entries)
-                  Chip(label: Text('${profileSectionLabel(entry.key)}: ${entry.value}')),
+                  Chip(
+                    label: Text(
+                      '${profileSectionLabel(entry.key)}: ${entry.value}',
+                    ),
+                  ),
               ],
             ),
             const SizedBox(height: 14),
@@ -1595,8 +2101,15 @@ class _CandidateDashboardScreenState extends State<CandidateDashboardScreen> {
               CompanyCard(
                 company: company,
                 config: widget.config,
-                trailing: textOf(company['distance_km']).isEmpty ? null : '${company['distance_km']} km',
-                onTap: () => showCompanyDetailSheet(context, widget.api, widget.config, intValue(company['id']) ?? 0),
+                trailing: textOf(company['distance_km']).isEmpty
+                    ? null
+                    : '${company['distance_km']} km',
+                onTap: () => showCompanyDetailSheet(
+                  context,
+                  widget.api,
+                  widget.config,
+                  intValue(company['id']) ?? 0,
+                ),
               ),
           ],
         ],
@@ -1606,7 +2119,12 @@ class _CandidateDashboardScreenState extends State<CandidateDashboardScreen> {
 }
 
 class CandidateProfileScreen extends StatefulWidget {
-  const CandidateProfileScreen({super.key, required this.api, required this.session, required this.config});
+  const CandidateProfileScreen({
+    super.key,
+    required this.api,
+    required this.session,
+    required this.config,
+  });
 
   final RecruitmentApi api;
   final AuthSession session;
@@ -1634,7 +2152,10 @@ class _CandidateProfileScreenState extends State<CandidateProfileScreen> {
       _error = '';
     });
     try {
-      final results = await Future.wait([widget.api.profileBundle(), widget.api.resumes()]);
+      final results = await Future.wait([
+        widget.api.profileBundle(),
+        widget.api.resumes(),
+      ]);
       setState(() {
         _bundle = asMap(results[0]);
         _resumes = results[1] as List<Map<String, dynamic>>;
@@ -1650,7 +2171,12 @@ class _CandidateProfileScreenState extends State<CandidateProfileScreen> {
 
   Future<void> _editPersonal() async {
     final personal = asMap(_bundle['personal']);
-    final result = await showCandidatePersonalDialog(context, widget.config, personal);
+    final result = await showCandidatePersonalDialog(
+      context,
+      widget.api,
+      widget.config,
+      personal,
+    );
     if (result == null) return;
     try {
       await widget.api.updateCandidate(result.fields, image: result.image);
@@ -1663,14 +2189,26 @@ class _CandidateProfileScreenState extends State<CandidateProfileScreen> {
     }
   }
 
-  Future<void> _upsertSection(ProfileSection section, [Map<String, dynamic>? item]) async {
+  Future<void> _upsertSection(
+    ProfileSection section, [
+    Map<String, dynamic>? item,
+  ]) async {
     final result = await showSectionDialog(context, section, item);
     if (result == null) return;
     try {
       if (item == null) {
-        await widget.api.sectionCreate(section.key, result.fields, image: result.image);
+        await widget.api.sectionCreate(
+          section.key,
+          result.fields,
+          image: result.image,
+        );
       } else {
-        await widget.api.sectionUpdate(section.key, intValue(item['id'])!, result.fields, image: result.image);
+        await widget.api.sectionUpdate(
+          section.key,
+          intValue(item['id'])!,
+          result.fields,
+          image: result.image,
+        );
       }
       showSnack(context, 'Đã lưu ${section.label.toLowerCase()}.');
       await _load();
@@ -1679,8 +2217,14 @@ class _CandidateProfileScreenState extends State<CandidateProfileScreen> {
     }
   }
 
-  Future<void> _deleteSection(ProfileSection section, Map<String, dynamic> item) async {
-    final ok = await confirmDialog(context, 'Xóa ${section.label.toLowerCase()}?');
+  Future<void> _deleteSection(
+    ProfileSection section,
+    Map<String, dynamic> item,
+  ) async {
+    final ok = await confirmDialog(
+      context,
+      'Xóa ${section.label.toLowerCase()}?',
+    );
     if (!ok) return;
     try {
       await widget.api.sectionDelete(section.key, intValue(item['id'])!);
@@ -1692,7 +2236,11 @@ class _CandidateProfileScreenState extends State<CandidateProfileScreen> {
   }
 
   Future<void> _createResume() async {
-    final title = await showTextInputDialog(context, title: 'Tạo CV từ hồ sơ', label: 'Tiêu đề CV');
+    final title = await showTextInputDialog(
+      context,
+      title: 'Tạo CV từ hồ sơ',
+      label: 'Tiêu đề CV',
+    );
     if (title == null || title.trim().isEmpty) return;
     final personal = asMap(_bundle['personal']);
     final basic = {
@@ -1719,7 +2267,8 @@ class _CandidateProfileScreenState extends State<CandidateProfileScreen> {
     try {
       await widget.api.createResume({
         'basicInfor': basic,
-        for (final section in profileSections) section.key: listFromResponse(_bundle, key: section.key),
+        for (final section in profileSections)
+          section.key: listFromResponse(_bundle, key: section.key),
       });
       showSnack(context, 'Đã tạo CV.');
       await _load();
@@ -1745,7 +2294,8 @@ class _CandidateProfileScreenState extends State<CandidateProfileScreen> {
       await widget.api.updateResume({
         'resume_id': id,
         'basicInfor': basic,
-        for (final section in profileSections) section.key: listFromResponse(detail, key: section.key),
+        for (final section in profileSections)
+          section.key: listFromResponse(detail, key: section.key),
       });
       showSnack(context, 'Đã đổi tên CV.');
       await _load();
@@ -1781,8 +2331,10 @@ class _CandidateProfileScreenState extends State<CandidateProfileScreen> {
             title: 'Quản lý hồ sơ ứng viên',
             subtitle: 'Cập nhật thông tin cá nhân, các mục năng lực và CV.',
           ),
-          if (_loading) const LoadingList()
-          else if (_error.isNotEmpty) ErrorPanel(message: _error, onRetry: _load)
+          if (_loading)
+            const LoadingList()
+          else if (_error.isNotEmpty)
+            ErrorPanel(message: _error, onRetry: _load)
           else ...[
             Card(
               child: Padding(
@@ -1792,19 +2344,34 @@ class _CandidateProfileScreenState extends State<CandidateProfileScreen> {
                   children: [
                     Row(
                       children: [
-                        AppAvatar(url: widget.config.resolveAssetUrl(textOf(personal['avatar'])), label: fullName(personal), radius: 34),
+                        AppAvatar(
+                          url: widget.config.resolveAssetUrl(
+                            textOf(personal['avatar']),
+                          ),
+                          label: fullName(personal),
+                          radius: 34,
+                        ),
                         const SizedBox(width: 12),
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(fullName(personal), style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800)),
+                              Text(
+                                fullName(personal),
+                                style: Theme.of(context).textTheme.titleLarge
+                                    ?.copyWith(fontWeight: FontWeight.w800),
+                              ),
                               Text(textOf(personal['email'], 'Chưa có email')),
-                              Text(textOf(personal['phone'], 'Chưa có điện thoại')),
+                              Text(
+                                textOf(personal['phone'], 'Chưa có điện thoại'),
+                              ),
                             ],
                           ),
                         ),
-                        IconButton.filledTonal(onPressed: _editPersonal, icon: const Icon(Icons.edit_outlined)),
+                        IconButton.filledTonal(
+                          onPressed: _editPersonal,
+                          icon: const Icon(Icons.edit_outlined),
+                        ),
                       ],
                     ),
                     if (textOf(personal['objective']).isNotEmpty) ...[
@@ -1876,7 +2443,12 @@ class _CandidateProfileScreenState extends State<CandidateProfileScreen> {
 }
 
 class CandidateJobsScreen extends StatefulWidget {
-  const CandidateJobsScreen({super.key, required this.api, required this.session, required this.config});
+  const CandidateJobsScreen({
+    super.key,
+    required this.api,
+    required this.session,
+    required this.config,
+  });
 
   final RecruitmentApi api;
   final AuthSession session;
@@ -1886,7 +2458,8 @@ class CandidateJobsScreen extends StatefulWidget {
   State<CandidateJobsScreen> createState() => _CandidateJobsScreenState();
 }
 
-class _CandidateJobsScreenState extends State<CandidateJobsScreen> with SingleTickerProviderStateMixin {
+class _CandidateJobsScreenState extends State<CandidateJobsScreen>
+    with SingleTickerProviderStateMixin {
   late final TabController _tabs;
   List<Map<String, dynamic>> _applied = [];
   List<Map<String, dynamic>> _saved = [];
@@ -1943,58 +2516,77 @@ class _CandidateJobsScreenState extends State<CandidateJobsScreen> with SingleTi
             subtitle: 'Quản lý việc đã ứng tuyển và danh sách đã lưu.',
           ),
         ),
-        TabBar(controller: _tabs, tabs: const [Tab(text: 'Đã ứng tuyển'), Tab(text: 'Đã lưu')]),
+        TabBar(
+          controller: _tabs,
+          tabs: const [
+            Tab(text: 'Đã ứng tuyển'),
+            Tab(text: 'Đã lưu'),
+          ],
+        ),
         Expanded(
           child: RefreshIndicator(
             onRefresh: _load,
             child: _loading
                 ? const LoadingList()
                 : _error.isNotEmpty
-                    ? ListView(padding: const EdgeInsets.all(16), children: [ErrorPanel(message: _error, onRetry: _load)])
-                    : TabBarView(
-                        controller: _tabs,
+                ? ListView(
+                    padding: const EdgeInsets.all(16),
+                    children: [ErrorPanel(message: _error, onRetry: _load)],
+                  )
+                : TabBarView(
+                    controller: _tabs,
+                    children: [
+                      ListView(
+                        padding: const EdgeInsets.all(16),
                         children: [
-                          ListView(
-                            padding: const EdgeInsets.all(16),
-                            children: [
-                              if (_applied.isEmpty) const EmptyState(message: 'Chưa ứng tuyển công việc nào.')
-                              else
-                                for (final item in _applied)
-                                  Card(
-                                    child: ListTile(
-                                      leading: statusIcon(textOf(item['status'])),
-                                      title: Text(textOf(item['jname'])),
-                                      subtitle: Text('${textOf(item['name'])}\n${applicationStatusText(textOf(item['status']))} - ${textOf(item['postDate'])}'),
-                                      isThreeLine: true,
-                                      trailing: IconButton(
-                                        icon: const Icon(Icons.open_in_new),
-                                        onPressed: () => launchExternal(widget.config.resolveAssetUrl(textOf(item['cv_link']))),
+                          if (_applied.isEmpty)
+                            const EmptyState(
+                              message: 'Chưa ứng tuyển công việc nào.',
+                            )
+                          else
+                            for (final item in _applied)
+                              Card(
+                                child: ListTile(
+                                  leading: statusIcon(textOf(item['status'])),
+                                  title: Text(textOf(item['jname'])),
+                                  subtitle: Text(
+                                    '${textOf(item['name'])}\n${applicationStatusText(textOf(item['status']))} - ${textOf(item['postDate'])}',
+                                  ),
+                                  isThreeLine: true,
+                                  trailing: IconButton(
+                                    icon: const Icon(Icons.open_in_new),
+                                    onPressed: () => launchExternal(
+                                      widget.config.resolveAssetUrl(
+                                        textOf(item['cv_link']),
                                       ),
                                     ),
                                   ),
-                            ],
-                          ),
-                          ListView(
-                            padding: const EdgeInsets.all(16),
-                            children: [
-                              if (_saved.isEmpty) const EmptyState(message: 'Chưa lưu công việc nào.')
-                              else
-                                for (final job in _saved)
-                                  JobCard(
-                                    job: job,
-                                    config: widget.config,
-                                    onTap: () => showJobDetailSheet(
-                                      context,
-                                      api: widget.api,
-                                      session: widget.session,
-                                      config: widget.config,
-                                      jobId: intValue(job['id']) ?? 0,
-                                    ),
-                                  ),
-                            ],
-                          ),
+                                ),
+                              ),
                         ],
                       ),
+                      ListView(
+                        padding: const EdgeInsets.all(16),
+                        children: [
+                          if (_saved.isEmpty)
+                            const EmptyState(message: 'Chưa lưu công việc nào.')
+                          else
+                            for (final job in _saved)
+                              JobCard(
+                                job: job,
+                                config: widget.config,
+                                onTap: () => showJobDetailSheet(
+                                  context,
+                                  api: widget.api,
+                                  session: widget.session,
+                                  config: widget.config,
+                                  jobId: intValue(job['id']) ?? 0,
+                                ),
+                              ),
+                        ],
+                      ),
+                    ],
+                  ),
           ),
         ),
       ],
@@ -2003,13 +2595,18 @@ class _CandidateJobsScreenState extends State<CandidateJobsScreen> with SingleTi
 }
 
 class CandidateMessagesScreen extends StatefulWidget {
-  const CandidateMessagesScreen({super.key, required this.api, required this.session});
+  const CandidateMessagesScreen({
+    super.key,
+    required this.api,
+    required this.session,
+  });
 
   final RecruitmentApi api;
   final AuthSession session;
 
   @override
-  State<CandidateMessagesScreen> createState() => _CandidateMessagesScreenState();
+  State<CandidateMessagesScreen> createState() =>
+      _CandidateMessagesScreenState();
 }
 
 class _CandidateMessagesScreenState extends State<CandidateMessagesScreen> {
@@ -2055,7 +2652,10 @@ class _CandidateMessagesScreenState extends State<CandidateMessagesScreen> {
         title: Text(textOf(message['title'])),
         content: SingleChildScrollView(child: Text(textOf(message['content']))),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Đóng')),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Đóng'),
+          ),
         ],
       ),
     );
@@ -2072,18 +2672,34 @@ class _CandidateMessagesScreenState extends State<CandidateMessagesScreen> {
           const PageIntro(
             eyebrow: 'Thông báo',
             title: 'Tin nhắn từ nhà tuyển dụng',
-            subtitle: 'Các phản hồi hồ sơ và lời mời liên hệ sẽ xuất hiện tại đây.',
+            subtitle:
+                'Các phản hồi hồ sơ và lời mời liên hệ sẽ xuất hiện tại đây.',
           ),
-          if (_loading) const LoadingList()
-          else if (_error.isNotEmpty) ErrorPanel(message: _error, onRetry: _load)
-          else if (_messages.isEmpty) const EmptyState(message: 'Chưa có tin nhắn.')
+          if (_loading)
+            const LoadingList()
+          else if (_error.isNotEmpty)
+            ErrorPanel(message: _error, onRetry: _load)
+          else if (_messages.isEmpty)
+            const EmptyState(message: 'Chưa có tin nhắn.')
           else
             for (final message in _messages)
               Card(
                 child: ListTile(
-                  leading: Icon(boolValue(message['isRead']) ? Icons.mark_email_read_outlined : Icons.mark_email_unread_outlined),
-                  title: Text(textOf(message['title']), maxLines: 1, overflow: TextOverflow.ellipsis),
-                  subtitle: Text(textOf(message['name']), maxLines: 2, overflow: TextOverflow.ellipsis),
+                  leading: Icon(
+                    boolValue(message['isRead'])
+                        ? Icons.mark_email_read_outlined
+                        : Icons.mark_email_unread_outlined,
+                  ),
+                  title: Text(
+                    textOf(message['title']),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  subtitle: Text(
+                    textOf(message['name']),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => _open(message),
                 ),
@@ -2095,14 +2711,20 @@ class _CandidateMessagesScreenState extends State<CandidateMessagesScreen> {
 }
 
 class EmployerDashboardScreen extends StatefulWidget {
-  const EmployerDashboardScreen({super.key, required this.api, required this.session, required this.config});
+  const EmployerDashboardScreen({
+    super.key,
+    required this.api,
+    required this.session,
+    required this.config,
+  });
 
   final RecruitmentApi api;
   final AuthSession session;
   final ApiConfig config;
 
   @override
-  State<EmployerDashboardScreen> createState() => _EmployerDashboardScreenState();
+  State<EmployerDashboardScreen> createState() =>
+      _EmployerDashboardScreenState();
 }
 
 class _EmployerDashboardScreenState extends State<EmployerDashboardScreen> {
@@ -2123,7 +2745,11 @@ class _EmployerDashboardScreenState extends State<EmployerDashboardScreen> {
     });
     try {
       final data = await widget.api.employerDashboard();
-      await widget.session.updateUser({...widget.session.user, 'employer': asMap(data['employer'])});
+      await widget.session.updateUser({
+        ...widget.session.user,
+        ...data,
+        'employer': asMap(data['employer']),
+      });
       setState(() {
         _data = data;
         _loading = false;
@@ -2140,19 +2766,46 @@ class _EmployerDashboardScreenState extends State<EmployerDashboardScreen> {
   Widget build(BuildContext context) {
     final stats = asMap(_data['stats']);
     final employer = asMap(_data['employer']);
+    final workspace = asMap(_data['workspace_location']).isEmpty
+        ? employer
+        : asMap(_data['workspace_location']);
+    final branchStats = asMap(_data['branch_stats']);
+    final branchSummaries = listFromResponse(_data, key: 'branch_summaries');
+    final isCompanyScope = textOf(_data['profile_scope']) == 'company';
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 6, 16, 24),
         children: [
           PageIntro(
-            eyebrow: 'Nhà tuyển dụng',
+            eyebrow: isCompanyScope ? 'Tổng công ty' : 'Chi nhánh',
             title: textOf(employer['name'], 'Bảng điều khiển'),
-            subtitle: 'Theo dõi tin tuyển dụng, hồ sơ ứng viên và hiệu quả theo tháng.',
+            subtitle: isCompanyScope
+                ? 'Quản lý hiệu suất tuyển dụng của toàn bộ chi nhánh trong công ty.'
+                : 'Không gian làm việc: ${textOf(workspace['name'], 'Chi nhánh được phân quyền')}.',
           ),
-          if (_loading) const LoadingList()
-          else if (_error.isNotEmpty) ErrorPanel(message: _error, onRetry: _load)
+          if (_loading)
+            const LoadingList()
+          else if (_error.isNotEmpty)
+            ErrorPanel(message: _error, onRetry: _load)
           else ...[
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.place_outlined),
+                title: Text(
+                  textOf(workspace['name'], textOf(employer['name'])),
+                ),
+                subtitle: Text(
+                  textOf(workspace['address'], 'Chưa cập nhật địa chỉ'),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: Chip(
+                  label: Text(textOf(widget.session.employerRole, 'employer')),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
             GridView.count(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
@@ -2161,19 +2814,68 @@ class _EmployerDashboardScreenState extends State<EmployerDashboardScreen> {
               crossAxisSpacing: 10,
               mainAxisSpacing: 10,
               children: [
-                MetricCard(label: 'Tổng tin', value: textOf(stats['total_jobs'], '0'), icon: Icons.work_outline),
-                MetricCard(label: 'Đang mở', value: textOf(stats['active_jobs'], '0'), icon: Icons.toggle_on_outlined),
-                MetricCard(label: 'Hồ sơ', value: textOf(stats['total_applications'], '0'), icon: Icons.people_outline),
-                MetricCard(label: 'Phỏng vấn', value: textOf(stats['interviewing_applications'], '0'), icon: Icons.event_available_outlined),
+                MetricCard(
+                  label: 'Tổng tin',
+                  value: textOf(stats['total_jobs'], '0'),
+                  icon: Icons.work_outline,
+                ),
+                MetricCard(
+                  label: 'Đang mở',
+                  value: textOf(stats['active_jobs'], '0'),
+                  icon: Icons.toggle_on_outlined,
+                ),
+                MetricCard(
+                  label: 'Hồ sơ',
+                  value: textOf(stats['total_applications'], '0'),
+                  icon: Icons.people_outline,
+                ),
+                MetricCard(
+                  label: 'Phỏng vấn',
+                  value: textOf(stats['interviewing_applications'], '0'),
+                  icon: Icons.event_available_outlined,
+                ),
               ],
             ),
+            if (isCompanyScope && branchSummaries.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              SectionHeader(
+                title: 'Tổng quan chi nhánh',
+                subtitle:
+                    '${textOf(branchStats['active'], '0')} chi nhánh hoạt động, ${textOf(branchStats['total_members'], '0')} nhân sự HR.',
+              ),
+              for (final branch in branchSummaries.take(5))
+                Card(
+                  child: ListTile(
+                    leading: Icon(
+                      boolValue(branch['is_headquarters'])
+                          ? Icons.domain_outlined
+                          : Icons.apartment_outlined,
+                    ),
+                    title: Text(textOf(branch['name'])),
+                    subtitle: Text(
+                      '${textOf(branch['active_jobs'], '0')} tin mở • ${textOf(branch['waiting_applications'], '0')} hồ sơ chờ • ${textOf(branch['total_members'], '0')} HR',
+                    ),
+                    trailing: boolValue(branch['is_active'])
+                        ? const Chip(label: Text('Hoạt động'))
+                        : const Chip(label: Text('Tạm khóa')),
+                  ),
+                ),
+            ],
             const SizedBox(height: 14),
             SectionHeader(title: 'Trạng thái hồ sơ'),
-            for (final item in listFromResponse(_data, key: 'application_status'))
+            for (final item in listFromResponse(
+              _data,
+              key: 'application_status',
+            ))
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: LinearProgressIndicator(
-                  value: (intValue(item['value']) ?? 0) / ((intValue(stats['total_applications']) ?? 1).clamp(1, 999999)),
+                  value:
+                      (intValue(item['value']) ?? 0) /
+                      ((intValue(stats['total_applications']) ?? 1).clamp(
+                        1,
+                        999999,
+                      )),
                   minHeight: 10,
                   borderRadius: BorderRadius.circular(8),
                 ),
@@ -2185,8 +2887,14 @@ class _EmployerDashboardScreenState extends State<EmployerDashboardScreen> {
                 child: ListTile(
                   leading: const Icon(Icons.trending_up),
                   title: Text(textOf(job['jname'])),
-                  subtitle: Text('Ứng tuyển: ${textOf(job['total_applications'], '0')}'),
-                  trailing: Chip(label: Text(boolValue(job['is_active']) ? 'Đang mở' : 'Đã tắt')),
+                  subtitle: Text(
+                    'Ứng tuyển: ${textOf(job['total_applications'], '0')}',
+                  ),
+                  trailing: Chip(
+                    label: Text(
+                      boolValue(job['is_active']) ? 'Đang mở' : 'Đã tắt',
+                    ),
+                  ),
                 ),
               ),
           ],
@@ -2197,7 +2905,12 @@ class _EmployerDashboardScreenState extends State<EmployerDashboardScreen> {
 }
 
 class EmployerProfileScreen extends StatefulWidget {
-  const EmployerProfileScreen({super.key, required this.api, required this.session, required this.config});
+  const EmployerProfileScreen({
+    super.key,
+    required this.api,
+    required this.session,
+    required this.config,
+  });
 
   final RecruitmentApi api;
   final AuthSession session;
@@ -2238,11 +2951,23 @@ class _EmployerProfileScreenState extends State<EmployerProfileScreen> {
   }
 
   Future<void> _edit() async {
-    final result = await showEmployerProfileDialog(context, widget.config, _employer);
+    final result = await showEmployerProfileDialog(
+      context,
+      widget.api,
+      widget.config,
+      _employer,
+    );
     if (result == null) return;
     try {
-      final employer = await widget.api.updateEmployerProfile(result.fields, logo: result.logo, image: result.image);
-      await widget.session.updateUser({...widget.session.user, 'employer': employer});
+      final employer = await widget.api.updateEmployerProfile(
+        result.fields,
+        logo: result.logo,
+        image: result.image,
+      );
+      await widget.session.updateUser({
+        ...widget.session.user,
+        'employer': employer,
+      });
       showSnack(context, 'Đã cập nhật công ty.');
       await _load();
     } catch (error) {
@@ -2262,8 +2987,10 @@ class _EmployerProfileScreenState extends State<EmployerProfileScreen> {
             title: 'Hồ sơ nhà tuyển dụng',
             subtitle: 'Cập nhật thông tin hiển thị với ứng viên.',
           ),
-          if (_loading) const LoadingList()
-          else if (_error.isNotEmpty) ErrorPanel(message: _error, onRetry: _load)
+          if (_loading)
+            const LoadingList()
+          else if (_error.isNotEmpty)
+            ErrorPanel(message: _error, onRetry: _load)
           else
             Card(
               child: Padding(
@@ -2275,40 +3002,75 @@ class _EmployerProfileScreenState extends State<EmployerProfileScreen> {
                       ClipRRect(
                         borderRadius: BorderRadius.circular(8),
                         child: Image.network(
-                          widget.config.resolveAssetUrl(textOf(_employer['image'])),
+                          widget.config.resolveAssetUrl(
+                            textOf(_employer['image']),
+                          ),
                           height: 150,
                           width: double.infinity,
                           fit: BoxFit.cover,
-                          errorBuilder: (context, error, stackTrace) => const SizedBox(height: 0),
+                          errorBuilder: (context, error, stackTrace) =>
+                              const SizedBox(height: 0),
                         ),
                       ),
                     const SizedBox(height: 12),
                     Row(
                       children: [
-                        AppAvatar(url: widget.config.resolveAssetUrl(textOf(_employer['logo'])), label: textOf(_employer['name']), radius: 34),
+                        AppAvatar(
+                          url: widget.config.resolveAssetUrl(
+                            textOf(_employer['logo']),
+                          ),
+                          label: textOf(_employer['name']),
+                          radius: 34,
+                        ),
                         const SizedBox(width: 12),
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(textOf(_employer['name']), style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800)),
-                              Text(textOf(_employer['address'], 'Chưa có địa chỉ')),
-                              Text(textOf(_employer['website'], 'Chưa có website')),
+                              Text(
+                                textOf(_employer['name']),
+                                style: Theme.of(context).textTheme.titleLarge
+                                    ?.copyWith(fontWeight: FontWeight.w800),
+                              ),
+                              Text(
+                                textOf(_employer['address'], 'Chưa có địa chỉ'),
+                              ),
+                              Text(
+                                textOf(_employer['website'], 'Chưa có website'),
+                              ),
                             ],
                           ),
                         ),
-                        IconButton.filledTonal(onPressed: _edit, icon: const Icon(Icons.edit_outlined)),
+                        IconButton.filledTonal(
+                          onPressed: _edit,
+                          icon: const Icon(Icons.edit_outlined),
+                        ),
                       ],
                     ),
                     const SizedBox(height: 12),
-                    Text(textOf(_employer['description'], 'Chưa có mô tả công ty.')),
+                    Text(
+                      textOf(
+                        _employer['description'],
+                        'Chưa có mô tả công ty.',
+                      ),
+                    ),
                     const SizedBox(height: 12),
                     Wrap(
                       spacing: 8,
                       children: [
-                        Chip(label: Text('Liên hệ: ${textOf(_employer['contact_name'], 'Chưa có')}')),
-                        Chip(label: Text('SĐT: ${textOf(_employer['phone'], 'Chưa có')}')),
-                        Chip(label: Text('Quy mô: ${employeeRange(_employer)}')),
+                        Chip(
+                          label: Text(
+                            'Liên hệ: ${textOf(_employer['contact_name'], 'Chưa có')}',
+                          ),
+                        ),
+                        Chip(
+                          label: Text(
+                            'SĐT: ${textOf(_employer['phone'], 'Chưa có')}',
+                          ),
+                        ),
+                        Chip(
+                          label: Text('Quy mô: ${employeeRange(_employer)}'),
+                        ),
                       ],
                     ),
                   ],
@@ -2321,8 +3083,554 @@ class _EmployerProfileScreenState extends State<EmployerProfileScreen> {
   }
 }
 
+class EmployerBranchesScreen extends StatefulWidget {
+  const EmployerBranchesScreen({
+    super.key,
+    required this.api,
+    required this.session,
+  });
+
+  final RecruitmentApi api;
+  final AuthSession session;
+
+  @override
+  State<EmployerBranchesScreen> createState() => _EmployerBranchesScreenState();
+}
+
+class _EmployerBranchesScreenState extends State<EmployerBranchesScreen> {
+  List<Map<String, dynamic>> _branches = [];
+  Map<String, dynamic> _permissions = {};
+  bool _loading = true;
+  String _error = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = '';
+    });
+    try {
+      final payload = await widget.api.employerMe();
+      await widget.session.updateUser({...widget.session.user, ...payload});
+      setState(() {
+        _branches = listFromResponse(payload, key: 'branches');
+        _permissions = asMap(payload['permissions']);
+        _loading = false;
+      });
+    } catch (error) {
+      setState(() {
+        _error = error.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _upsert([Map<String, dynamic>? branch]) async {
+    final canCreate = boolValue(_permissions['create_branches']);
+    final canUpdate =
+        boolValue(_permissions['update_branches']) ||
+        boolValue(_permissions['update_own_branch']);
+    if (branch == null && !canCreate) return;
+    if (branch != null && !canUpdate) return;
+
+    final result = await showBranchDialog(context, widget.api, branch);
+    if (result == null) return;
+    try {
+      if (branch == null) {
+        await widget.api.createBranch(result);
+        showSnack(context, 'Đã tạo chi nhánh.');
+      } else {
+        await widget.api.updateBranch(intValue(branch['id'])!, result);
+        showSnack(context, 'Đã cập nhật chi nhánh.');
+      }
+      await _load();
+    } catch (error) {
+      showSnack(context, error.toString(), isError: true);
+    }
+  }
+
+  Future<void> _delete(Map<String, dynamic> branch) async {
+    if (!boolValue(_permissions['delete_branches'])) return;
+    final id = intValue(branch['id']);
+    if (id == null) return;
+    final ok = await confirmDialog(
+      context,
+      'Ngừng hoạt động chi nhánh "${textOf(branch['name'])}"?',
+    );
+    if (!ok) return;
+    try {
+      await widget.api.deleteBranch(id);
+      showSnack(context, 'Đã ngừng hoạt động chi nhánh.');
+      await _load();
+    } catch (error) {
+      showSnack(context, error.toString(), isError: true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final canCreate =
+        boolValue(_permissions['create_branches']) ||
+        widget.session.canEmployer('create_branches');
+    final canUpdate =
+        boolValue(_permissions['update_branches']) ||
+        boolValue(_permissions['update_own_branch']) ||
+        widget.session.canEmployer('update_branches');
+    final canDelete =
+        boolValue(_permissions['delete_branches']) ||
+        widget.session.canEmployer('delete_branches');
+
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 6, 16, 24),
+        children: [
+          PageIntro(
+            eyebrow: 'Chi nhánh',
+            title: 'Quản lý chi nhánh',
+            subtitle:
+                'Mỗi chi nhánh có địa chỉ, tọa độ bản đồ và thông tin liên hệ riêng.',
+            trailing: canCreate
+                ? FilledButton.icon(
+                    onPressed: () => _upsert(),
+                    icon: const Icon(Icons.add_location_alt_outlined),
+                    label: const Text('Thêm chi nhánh'),
+                  )
+                : null,
+          ),
+          if (_loading)
+            const LoadingList()
+          else if (_error.isNotEmpty)
+            ErrorPanel(message: _error, onRetry: _load)
+          else if (_branches.isEmpty)
+            const EmptyState(
+              message: 'Chưa có chi nhánh trong phạm vi của bạn.',
+            )
+          else
+            for (final branch in _branches)
+              Card(
+                child: ListTile(
+                  leading: Icon(
+                    boolValue(branch['is_headquarters'])
+                        ? Icons.domain_outlined
+                        : Icons.apartment_outlined,
+                  ),
+                  title: Text(
+                    textOf(branch['name']),
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  subtitle: Text(
+                    '${textOf(branch['address'], 'Chưa có địa chỉ')}\n${textOf(branch['contact_name'], 'Chưa có liên hệ')} • ${textOf(branch['phone'], 'Chưa có SĐT')}',
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  isThreeLine: true,
+                  trailing: Wrap(
+                    children: [
+                      if (canUpdate)
+                        IconButton(
+                          onPressed: () => _upsert(branch),
+                          icon: const Icon(Icons.edit_location_alt_outlined),
+                        ),
+                      if (canDelete && !boolValue(branch['is_headquarters']))
+                        IconButton(
+                          onPressed: () => _delete(branch),
+                          icon: const Icon(Icons.block_outlined),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+        ],
+      ),
+    );
+  }
+}
+
+class EmployerMembersScreen extends StatefulWidget {
+  const EmployerMembersScreen({
+    super.key,
+    required this.api,
+    required this.session,
+  });
+
+  final RecruitmentApi api;
+  final AuthSession session;
+
+  @override
+  State<EmployerMembersScreen> createState() => _EmployerMembersScreenState();
+}
+
+class _EmployerMembersScreenState extends State<EmployerMembersScreen> {
+  List<Map<String, dynamic>> _members = [];
+  List<Map<String, dynamic>> _branches = [];
+  Map<String, dynamic> _permissions = {};
+  bool _loading = true;
+  String _error = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = '';
+    });
+    try {
+      final results = await Future.wait([
+        widget.api.employerMe(),
+        widget.api.employerMembers(),
+      ]);
+      final payload = asMap(results[0]);
+      await widget.session.updateUser({...widget.session.user, ...payload});
+      setState(() {
+        _branches = listFromResponse(payload, key: 'branches');
+        _permissions = asMap(payload['permissions']);
+        _members = results[1] as List<Map<String, dynamic>>;
+        _loading = false;
+      });
+    } catch (error) {
+      setState(() {
+        _error = error.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _upsert([Map<String, dynamic>? member]) async {
+    final canCreate = boolValue(_permissions['create_members']);
+    final canUpdate = boolValue(_permissions['update_members']);
+    if (member == null && !canCreate) return;
+    if (member != null && !canUpdate) return;
+
+    final result = await showMemberDialog(
+      context,
+      branches: _branches,
+      actorRole: textOf(_permissions['role'], widget.session.employerRole),
+      member: member,
+    );
+    if (result == null) return;
+    try {
+      if (member == null) {
+        final created = await widget.api.createMember(result);
+        final tempPassword = textOf(created['temporary_password']);
+        showSnack(
+          context,
+          tempPassword.isEmpty
+              ? 'Đã tạo tài khoản.'
+              : 'Đã tạo tài khoản. Mật khẩu tạm: $tempPassword',
+        );
+      } else {
+        await widget.api.updateMember(intValue(member['id'])!, result);
+        showSnack(context, 'Đã cập nhật tài khoản.');
+      }
+      await _load();
+    } catch (error) {
+      showSnack(context, error.toString(), isError: true);
+    }
+  }
+
+  Future<void> _setLocked(Map<String, dynamic> member, bool locked) async {
+    final id = intValue(member['id']);
+    if (id == null || !boolValue(_permissions['lock_members'])) return;
+    try {
+      if (locked) {
+        await widget.api.lockMember(id);
+        showSnack(context, 'Đã khóa tài khoản.');
+      } else {
+        await widget.api.updateMember(id, {
+          'status': 'active',
+          'is_active': true,
+        });
+        showSnack(context, 'Đã mở khóa tài khoản.');
+      }
+      await _load();
+    } catch (error) {
+      showSnack(context, error.toString(), isError: true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final canCreate =
+        boolValue(_permissions['create_members']) ||
+        widget.session.canEmployer('create_members');
+    final canUpdate =
+        boolValue(_permissions['update_members']) ||
+        widget.session.canEmployer('update_members');
+    final canLock =
+        boolValue(_permissions['lock_members']) ||
+        widget.session.canEmployer('lock_members');
+
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 6, 16, 24),
+        children: [
+          PageIntro(
+            eyebrow: 'Phân quyền',
+            title: 'Tài khoản HR',
+            subtitle:
+                'Company owner quản lý toàn công ty, branch manager chỉ quản lý HR thuộc chi nhánh mình.',
+            trailing: canCreate
+                ? FilledButton.icon(
+                    onPressed: () => _upsert(),
+                    icon: const Icon(Icons.person_add_alt),
+                    label: const Text('Tạo tài khoản'),
+                  )
+                : null,
+          ),
+          if (_loading)
+            const LoadingList()
+          else if (_error.isNotEmpty)
+            ErrorPanel(message: _error, onRetry: _load)
+          else if (_members.isEmpty)
+            const EmptyState(
+              message: 'Chưa có tài khoản trong phạm vi quản lý.',
+            )
+          else
+            for (final member in _members)
+              Card(
+                child: ListTile(
+                  leading: const Icon(Icons.badge_outlined),
+                  title: Text(
+                    textOf(
+                      member['name'],
+                      textOf(asMap(member['user'])['email']),
+                    ),
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  subtitle: Text(
+                    '${memberRoleText(textOf(member['role']))} • ${textOf(asMap(member['branch'])['name'], 'Toàn công ty')}\n${textOf(asMap(member['user'])['email'])} • ${textOf(member['phone'], 'Chưa có SĐT')}',
+                  ),
+                  isThreeLine: true,
+                  trailing: Wrap(
+                    children: [
+                      Chip(
+                        label: Text(
+                          textOf(member['status']) == 'inactive'
+                              ? 'Đã khóa'
+                              : 'Hoạt động',
+                        ),
+                      ),
+                      if (canUpdate)
+                        IconButton(
+                          onPressed: () => _upsert(member),
+                          icon: const Icon(Icons.edit_outlined),
+                        ),
+                      if (canLock && textOf(member['role']) != 'company_owner')
+                        IconButton(
+                          onPressed: () => _setLocked(
+                            member,
+                            textOf(member['status']) != 'inactive',
+                          ),
+                          icon: Icon(
+                            textOf(member['status']) == 'inactive'
+                                ? Icons.lock_open_outlined
+                                : Icons.lock_outline,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+        ],
+      ),
+    );
+  }
+}
+
+class EmployerBillingScreen extends StatefulWidget {
+  const EmployerBillingScreen({super.key, required this.api});
+
+  final RecruitmentApi api;
+
+  @override
+  State<EmployerBillingScreen> createState() => _EmployerBillingScreenState();
+}
+
+class _EmployerBillingScreenState extends State<EmployerBillingScreen> {
+  Map<String, dynamic> _summary = {};
+  bool _loading = true;
+  String _error = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = '';
+    });
+    try {
+      final summary = await widget.api.employerBillingSummary();
+      setState(() {
+        _summary = summary;
+        _loading = false;
+      });
+    } catch (error) {
+      setState(() {
+        _error = error.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _checkout(String planKey) async {
+    try {
+      final result = await widget.api.createBillingCheckout(planKey);
+      final url = textOf(result['checkout_url']);
+      if (url.isNotEmpty) await launchExternal(url);
+      showSnack(context, 'Đã tạo liên kết thanh toán.');
+      await _load();
+    } catch (error) {
+      showSnack(context, error.toString(), isError: true);
+    }
+  }
+
+  Future<void> _syncLatest() async {
+    final latest = asMap(_summary['latest_payment']);
+    final orderCode = latest['order_code'];
+    if (orderCode == null) {
+      showSnack(context, 'Chưa có giao dịch để đồng bộ.', isError: true);
+      return;
+    }
+    try {
+      final result = await widget.api.syncBillingPayment(orderCode);
+      setState(() => _summary = asMap(result['summary']));
+      showSnack(context, 'Đã đồng bộ giao dịch.');
+    } catch (error) {
+      showSnack(context, error.toString(), isError: true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final current = asMap(_summary['current_subscription']);
+    final currentRank = intValue(current['plan_rank']) ?? -1;
+    final latest = asMap(_summary['latest_payment']);
+    final plans = listFromResponse(
+      _summary,
+      key: 'plans',
+    ).where((plan) => (intValue(plan['rank']) ?? 0) >= currentRank).toList();
+
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 6, 16, 24),
+        children: [
+          PageIntro(
+            eyebrow: 'Thanh toán',
+            title: 'Gói dịch vụ nhà tuyển dụng',
+            subtitle: current.isEmpty
+                ? 'Chọn một gói để mở quyền đăng tin và quản lý tuyển dụng.'
+                : '${textOf(current['plan_name'])} còn ${textOf(current['remaining_job_posts'], '0')} tin, hết hạn ${textOf(current['ends_at'])}.',
+            trailing: OutlinedButton.icon(
+              onPressed: _syncLatest,
+              icon: const Icon(Icons.sync),
+              label: const Text('Đồng bộ'),
+            ),
+          ),
+          if (_loading)
+            const LoadingList()
+          else if (_error.isNotEmpty)
+            ErrorPanel(message: _error, onRetry: _load)
+          else ...[
+            if (latest.isNotEmpty)
+              Card(
+                child: ListTile(
+                  leading: const Icon(Icons.receipt_long_outlined),
+                  title: Text(
+                    'Giao dịch gần nhất #${textOf(latest['order_code'])}',
+                  ),
+                  subtitle: Text(
+                    '${moneyText(latest['amount'])} • ${textOf(latest['status'])}',
+                  ),
+                ),
+              ),
+            for (final plan in plans)
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              textOf(plan['name']),
+                              style: Theme.of(context).textTheme.titleLarge
+                                  ?.copyWith(fontWeight: FontWeight.w900),
+                            ),
+                          ),
+                          if (textOf(current['plan_key']) ==
+                              textOf(plan['key']))
+                            const Chip(label: Text('Đang dùng')),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        moneyText(plan['amount']),
+                        style: Theme.of(context).textTheme.headlineSmall
+                            ?.copyWith(fontWeight: FontWeight.w900),
+                      ),
+                      Text(
+                        '${textOf(plan['job_posts'])} tin tuyển dụng • ${textOf(plan['duration_days'])} ngày',
+                      ),
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          for (final feature in listFromAny(plan['features']))
+                            Chip(label: Text(textOf(feature))),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton.icon(
+                          onPressed:
+                              textOf(current['plan_key']) == textOf(plan['key'])
+                              ? null
+                              : () => _checkout(textOf(plan['key'])),
+                          icon: const Icon(Icons.payment_outlined),
+                          label: Text(
+                            textOf(current['plan_key']) == textOf(plan['key'])
+                                ? 'Đang sử dụng'
+                                : 'Thanh toán',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 class EmployerJobsScreen extends StatefulWidget {
-  const EmployerJobsScreen({super.key, required this.api, required this.session});
+  const EmployerJobsScreen({
+    super.key,
+    required this.api,
+    required this.session,
+  });
 
   final RecruitmentApi api;
   final AuthSession session;
@@ -2335,10 +3643,11 @@ class _EmployerJobsScreenState extends State<EmployerJobsScreen> {
   final _keyword = TextEditingController();
   List<Map<String, dynamic>> _jobs = [];
   List<Map<String, dynamic>> _industries = [];
-  List<Map<String, dynamic>> _locations = [];
   List<Map<String, dynamic>> _jtypes = [];
   List<Map<String, dynamic>> _jlevels = [];
   List<Map<String, dynamic>> _skills = [];
+  List<Map<String, dynamic>> _branches = [];
+  Map<String, dynamic> _permissions = {};
   bool _loading = true;
   String _error = '';
 
@@ -2355,28 +3664,32 @@ class _EmployerJobsScreenState extends State<EmployerJobsScreen> {
   }
 
   Future<void> _load() async {
-    final employerId = widget.session.currentId;
-    if (employerId == null) return;
     setState(() {
       _loading = true;
       _error = '';
     });
     try {
       final results = await Future.wait([
+        widget.api.employerMe(),
         widget.api.industries(),
-        widget.api.locations(),
         widget.api.jtypes(),
         widget.api.jlevels(),
         widget.api.jskills(),
-        widget.api.employerJobs(employerId, keyword: _keyword.text.trim()),
+        widget.api.employerJobs(keyword: _keyword.text.trim()),
       ]);
+      final employerPayload = asMap(results[0]);
+      await widget.session.updateUser({
+        ...widget.session.user,
+        ...employerPayload,
+      });
       setState(() {
-        _industries = results[0];
-        _locations = results[1];
-        _jtypes = results[2];
-        _jlevels = results[3];
-        _skills = results[4];
-        _jobs = results[5];
+        _permissions = asMap(employerPayload['permissions']);
+        _branches = listFromResponse(employerPayload, key: 'branches');
+        _industries = results[1] as List<Map<String, dynamic>>;
+        _jtypes = results[2] as List<Map<String, dynamic>>;
+        _jlevels = results[3] as List<Map<String, dynamic>>;
+        _skills = results[4] as List<Map<String, dynamic>>;
+        _jobs = results[5] as List<Map<String, dynamic>>;
         _loading = false;
       });
     } catch (error) {
@@ -2399,9 +3712,10 @@ class _EmployerJobsScreenState extends State<EmployerJobsScreen> {
       jtypes: _jtypes,
       jlevels: _jlevels,
       industries: _industries,
-      locations: _locations,
+      branches: _branches,
       skills: _skills,
       selectedSkills: selectedSkills,
+      api: widget.api,
     );
     if (result == null) return;
     try {
@@ -2410,7 +3724,10 @@ class _EmployerJobsScreenState extends State<EmployerJobsScreen> {
       } else {
         await widget.api.updateJob(intValue(job['id'])!, result);
       }
-      showSnack(context, job == null ? 'Đã tạo tin tuyển dụng.' : 'Đã cập nhật tin tuyển dụng.');
+      showSnack(
+        context,
+        job == null ? 'Đã tạo tin tuyển dụng.' : 'Đã cập nhật tin tuyển dụng.',
+      );
       await _load();
     } catch (error) {
       showSnack(context, error.toString(), isError: true);
@@ -2432,6 +3749,9 @@ class _EmployerJobsScreenState extends State<EmployerJobsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final canManage =
+        boolValue(_permissions['manage_jobs']) ||
+        widget.session.canEmployer('manage_jobs');
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView(
@@ -2441,35 +3761,62 @@ class _EmployerJobsScreenState extends State<EmployerJobsScreen> {
             eyebrow: 'Tin tuyển dụng',
             title: 'Quản lý tin tuyển',
             subtitle: '${_jobs.length} tin trong danh sách hiện tại.',
-            trailing: FilledButton.icon(
-              onPressed: () => _upsert(),
-              icon: const Icon(Icons.add),
-              label: const Text('Tạo tin'),
-            ),
+            trailing: canManage
+                ? FilledButton.icon(
+                    onPressed: _branches.isEmpty ? null : () => _upsert(),
+                    icon: const Icon(Icons.add),
+                    label: const Text('Tạo tin'),
+                  )
+                : null,
           ),
           TextField(
             controller: _keyword,
-            decoration: const InputDecoration(prefixIcon: Icon(Icons.search), labelText: 'Tìm theo tên, hình thức, cấp bậc'),
+            decoration: const InputDecoration(
+              prefixIcon: Icon(Icons.search),
+              labelText: 'Tìm theo tên, hình thức, cấp bậc',
+            ),
             onSubmitted: (_) => _load(),
           ),
           const SizedBox(height: 14),
-          if (_loading) const LoadingList()
-          else if (_error.isNotEmpty) ErrorPanel(message: _error, onRetry: _load)
-          else if (_jobs.isEmpty) const EmptyState(message: 'Chưa có tin tuyển dụng.')
+          if (_loading)
+            const LoadingList()
+          else if (_error.isNotEmpty)
+            ErrorPanel(message: _error, onRetry: _load)
+          else if (_jobs.isEmpty)
+            const EmptyState(message: 'Chưa có tin tuyển dụng.')
           else
             for (final job in _jobs)
               Card(
                 child: ListTile(
-                  title: Text(textOf(job['jname']), style: const TextStyle(fontWeight: FontWeight.w700)),
-                  subtitle: Text('${textOf(job['jtype_name'])} • ${textOf(job['jlevel_name'])}\nHạn: ${textOf(job['deadline'], textOf(job['expire_at']))}'),
+                  title: Text(
+                    textOf(job['jname']),
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  subtitle: Text(
+                    '${textOf(job['jtype_name'])} • ${textOf(job['jlevel_name'])} • ${textOf(asMap(job['branch'])['name'], 'Chưa gắn chi nhánh')}\nHạn: ${textOf(job['deadline'], textOf(job['expire_at']))}',
+                  ),
                   isThreeLine: true,
                   leading: const Icon(Icons.work_outline),
-                  trailing: Wrap(
-                    children: [
-                      Switch(value: boolValue(job['is_active']), onChanged: (_) => _toggle(job)),
-                      IconButton(onPressed: () => _upsert(job), icon: const Icon(Icons.edit_outlined)),
-                    ],
-                  ),
+                  trailing: canManage
+                      ? Wrap(
+                          children: [
+                            Switch(
+                              value: boolValue(job['is_active']),
+                              onChanged: (_) => _toggle(job),
+                            ),
+                            IconButton(
+                              onPressed: () => _upsert(job),
+                              icon: const Icon(Icons.edit_outlined),
+                            ),
+                          ],
+                        )
+                      : Chip(
+                          label: Text(
+                            boolValue(job['is_active'])
+                                ? 'Đang mở'
+                                : 'Tạm dừng',
+                          ),
+                        ),
                 ),
               ),
         ],
@@ -2484,10 +3831,12 @@ class EmployerApplicationsScreen extends StatefulWidget {
   final RecruitmentApi api;
 
   @override
-  State<EmployerApplicationsScreen> createState() => _EmployerApplicationsScreenState();
+  State<EmployerApplicationsScreen> createState() =>
+      _EmployerApplicationsScreenState();
 }
 
-class _EmployerApplicationsScreenState extends State<EmployerApplicationsScreen> {
+class _EmployerApplicationsScreenState
+    extends State<EmployerApplicationsScreen> {
   final _keyword = TextEditingController();
   final List<_StatusFilter> _filters = const [
     _StatusFilter('WAITING', 'Duyệt CV'),
@@ -2519,7 +3868,10 @@ class _EmployerApplicationsScreenState extends State<EmployerApplicationsScreen>
       _error = '';
     });
     try {
-      final items = await widget.api.applications(keyword: _keyword.text.trim(), status: _status);
+      final items = await widget.api.applications(
+        keyword: _keyword.text.trim(),
+        status: _status,
+      );
       setState(() {
         _items = items;
         _loading = false;
@@ -2543,10 +3895,19 @@ class _EmployerApplicationsScreenState extends State<EmployerApplicationsScreen>
       }
       return;
     }
-    final message = await showApplicationMessageDialog(context, candidate, actType, _status);
+    final message = await showApplicationMessageDialog(
+      context,
+      candidate,
+      actType,
+      _status,
+    );
     if (message == null) return;
     try {
-      await widget.api.processApplying({...candidate, ...message, 'actType': actType});
+      await widget.api.processApplying({
+        ...candidate,
+        ...message,
+        'actType': actType,
+      });
       showSnack(context, 'Đã xử lý hồ sơ.');
       await _load();
     } catch (error) {
@@ -2564,11 +3925,15 @@ class _EmployerApplicationsScreenState extends State<EmployerApplicationsScreen>
           const PageIntro(
             eyebrow: 'Ứng viên',
             title: 'Quản lý hồ sơ ứng tuyển',
-            subtitle: 'Duyệt CV, phản hồi phỏng vấn và gửi thông báo cho ứng viên.',
+            subtitle:
+                'Duyệt CV, phản hồi phỏng vấn và gửi thông báo cho ứng viên.',
           ),
           TextField(
             controller: _keyword,
-            decoration: const InputDecoration(prefixIcon: Icon(Icons.search), labelText: 'Tìm tên, email hoặc vị trí'),
+            decoration: const InputDecoration(
+              prefixIcon: Icon(Icons.search),
+              labelText: 'Tìm tên, email hoặc vị trí',
+            ),
             onSubmitted: (_) => _load(),
           ),
           const SizedBox(height: 10),
@@ -2592,16 +3957,23 @@ class _EmployerApplicationsScreenState extends State<EmployerApplicationsScreen>
             ),
           ),
           const SizedBox(height: 14),
-          if (_loading) const LoadingList()
-          else if (_error.isNotEmpty) ErrorPanel(message: _error, onRetry: _load)
-          else if (_items.isEmpty) const EmptyState(message: 'Không có hồ sơ ở trạng thái này.')
+          if (_loading)
+            const LoadingList()
+          else if (_error.isNotEmpty)
+            ErrorPanel(message: _error, onRetry: _load)
+          else if (_items.isEmpty)
+            const EmptyState(message: 'Không có hồ sơ ở trạng thái này.')
           else
             for (final item in _items)
               CandidateApplicationCard(
                 item: item,
                 onView: () => _process(item, 'VIEWED'),
-                onAccept: _status == 'PASSED' || _status.contains('FAILED') ? null : () => _process(item, 'ACCEPT'),
-                onReject: _status == 'PASSED' || _status.contains('FAILED') ? null : () => _process(item, 'REJECT'),
+                onAccept: _status == 'PASSED' || _status.contains('FAILED')
+                    ? null
+                    : () => _process(item, 'ACCEPT'),
+                onReject: _status == 'PASSED' || _status.contains('FAILED')
+                    ? null
+                    : () => _process(item, 'REJECT'),
               ),
         ],
       ),
@@ -2616,7 +3988,12 @@ class _StatusFilter {
 }
 
 class EmployerTalentScreen extends StatefulWidget {
-  const EmployerTalentScreen({super.key, required this.api, required this.session, required this.config});
+  const EmployerTalentScreen({
+    super.key,
+    required this.api,
+    required this.session,
+    required this.config,
+  });
 
   final RecruitmentApi api;
   final AuthSession session;
@@ -2652,15 +4029,20 @@ class _EmployerTalentScreenState extends State<EmployerTalentScreen> {
 
   @override
   void dispose() {
-    for (final controller in [_keyword, _address, _school, _major, _experience, _project]) {
+    for (final controller in [
+      _keyword,
+      _address,
+      _school,
+      _major,
+      _experience,
+      _project,
+    ]) {
       controller.dispose();
     }
     super.dispose();
   }
 
   Future<void> _load() async {
-    final employerId = widget.session.currentId;
-    if (employerId == null) return;
     setState(() {
       _loading = true;
       _error = '';
@@ -2668,7 +4050,7 @@ class _EmployerTalentScreenState extends State<EmployerTalentScreen> {
     try {
       final results = await Future.wait([
         widget.api.jskills(),
-        widget.api.employerJobs(employerId),
+        widget.api.employerJobs(),
         widget.api.talentRecommendations(),
         widget.api.searchCandidates(_filters()),
       ]);
@@ -2688,17 +4070,17 @@ class _EmployerTalentScreenState extends State<EmployerTalentScreen> {
   }
 
   Map<String, dynamic> _filters() => {
-        'keyword': _keyword.text.trim(),
-        'gender': _gender,
-        'address': _address.text.trim(),
-        'school': _school.text.trim(),
-        'major': _major.text.trim(),
-        'experience': _experience.text.trim(),
-        'project': _project.text.trim(),
-        'skill_ids': _skillIds.toList(),
-        'job_id': _jobId,
-        'has_location': _hasLocation,
-      };
+    'keyword': _keyword.text.trim(),
+    'gender': _gender,
+    'address': _address.text.trim(),
+    'school': _school.text.trim(),
+    'major': _major.text.trim(),
+    'experience': _experience.text.trim(),
+    'project': _project.text.trim(),
+    'skill_ids': _skillIds.toList(),
+    'job_id': _jobId,
+    'has_location': _hasLocation,
+  };
 
   Future<void> _search() async {
     setState(() {
@@ -2725,7 +4107,12 @@ class _EmployerTalentScreenState extends State<EmployerTalentScreen> {
       showSnack(context, 'Chọn một job để liên hệ ứng viên.', isError: true);
       return;
     }
-    final result = await showContactCandidateDialog(context, candidate, targetJobId, _jobs);
+    final result = await showContactCandidateDialog(
+      context,
+      candidate,
+      targetJobId,
+      _jobs,
+    );
     if (result == null) return;
     try {
       await widget.api.contactCandidate(result);
@@ -2745,40 +4132,56 @@ class _EmployerTalentScreenState extends State<EmployerTalentScreen> {
           const PageIntro(
             eyebrow: 'Talent discovery',
             title: 'Tìm kiếm ứng viên',
-            subtitle: 'Lọc hồ sơ theo kỹ năng, học vấn, kinh nghiệm và job đang tuyển.',
+            subtitle:
+                'Lọc hồ sơ theo kỹ năng, học vấn, kinh nghiệm và job đang tuyển.',
           ),
           Card(
             child: Padding(
               padding: const EdgeInsets.all(14),
               child: Column(
                 children: [
-                  TextField(controller: _keyword, decoration: const InputDecoration(labelText: 'Từ khóa')),
+                  TextField(
+                    controller: _keyword,
+                    decoration: const InputDecoration(labelText: 'Từ khóa'),
+                  ),
                   const SizedBox(height: 10),
                   Row(
                     children: [
                       Expanded(
                         child: DropdownButtonFormField<String>(
                           initialValue: _gender,
-                          decoration: const InputDecoration(labelText: 'Giới tính'),
+                          decoration: const InputDecoration(
+                            labelText: 'Giới tính',
+                          ),
                           items: const [
                             DropdownMenuItem(value: '', child: Text('Tất cả')),
                             DropdownMenuItem(value: '1', child: Text('Nam')),
                             DropdownMenuItem(value: '0', child: Text('Nữ')),
                           ],
-                          onChanged: (value) => setState(() => _gender = value ?? ''),
+                          onChanged: (value) =>
+                              setState(() => _gender = value ?? ''),
                         ),
                       ),
                       const SizedBox(width: 10),
                       Expanded(
                         child: DropdownButtonFormField<String>(
                           initialValue: _jobId,
-                          decoration: const InputDecoration(labelText: 'Job liên hệ'),
+                          decoration: const InputDecoration(
+                            labelText: 'Job liên hệ',
+                          ),
                           items: [
-                            const DropdownMenuItem(value: '', child: Text('Chọn job')),
+                            const DropdownMenuItem(
+                              value: '',
+                              child: Text('Chọn job'),
+                            ),
                             for (final job in _jobs)
-                              DropdownMenuItem(value: textOf(job['id']), child: Text(textOf(job['jname']))),
+                              DropdownMenuItem(
+                                value: textOf(job['id']),
+                                child: Text(textOf(job['jname'])),
+                              ),
                           ],
-                          onChanged: (value) => setState(() => _jobId = value ?? ''),
+                          onChanged: (value) =>
+                              setState(() => _jobId = value ?? ''),
                         ),
                       ),
                     ],
@@ -2786,21 +4189,54 @@ class _EmployerTalentScreenState extends State<EmployerTalentScreen> {
                   const SizedBox(height: 10),
                   Row(
                     children: [
-                      Expanded(child: TextField(controller: _address, decoration: const InputDecoration(labelText: 'Khu vực'))),
+                      Expanded(
+                        child: TextField(
+                          controller: _address,
+                          decoration: const InputDecoration(
+                            labelText: 'Khu vực',
+                          ),
+                        ),
+                      ),
                       const SizedBox(width: 10),
-                      Expanded(child: TextField(controller: _school, decoration: const InputDecoration(labelText: 'Trường'))),
+                      Expanded(
+                        child: TextField(
+                          controller: _school,
+                          decoration: const InputDecoration(
+                            labelText: 'Trường',
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 10),
                   Row(
                     children: [
-                      Expanded(child: TextField(controller: _major, decoration: const InputDecoration(labelText: 'Chuyên ngành'))),
+                      Expanded(
+                        child: TextField(
+                          controller: _major,
+                          decoration: const InputDecoration(
+                            labelText: 'Chuyên ngành',
+                          ),
+                        ),
+                      ),
                       const SizedBox(width: 10),
-                      Expanded(child: TextField(controller: _experience, decoration: const InputDecoration(labelText: 'Kinh nghiệm'))),
+                      Expanded(
+                        child: TextField(
+                          controller: _experience,
+                          decoration: const InputDecoration(
+                            labelText: 'Kinh nghiệm',
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 10),
-                  TextField(controller: _project, decoration: const InputDecoration(labelText: 'Dự án / công nghệ')),
+                  TextField(
+                    controller: _project,
+                    decoration: const InputDecoration(
+                      labelText: 'Dự án / công nghệ',
+                    ),
+                  ),
                   const SizedBox(height: 10),
                   Align(
                     alignment: Alignment.centerLeft,
@@ -2815,7 +4251,11 @@ class _EmployerTalentScreenState extends State<EmployerTalentScreen> {
                             onSelected: (selected) {
                               final id = intValue(skill['id']);
                               if (id == null) return;
-                              setState(() => selected ? _skillIds.add(id) : _skillIds.remove(id));
+                              setState(
+                                () => selected
+                                    ? _skillIds.add(id)
+                                    : _skillIds.remove(id),
+                              );
                             },
                           ),
                       ],
@@ -2829,39 +4269,71 @@ class _EmployerTalentScreenState extends State<EmployerTalentScreen> {
                   ),
                   SizedBox(
                     width: double.infinity,
-                    child: FilledButton.icon(onPressed: _search, icon: const Icon(Icons.search), label: const Text('Tìm kiếm')),
+                    child: FilledButton.icon(
+                      onPressed: _search,
+                      icon: const Icon(Icons.search),
+                      label: const Text('Tìm kiếm'),
+                    ),
                   ),
                 ],
               ),
             ),
           ),
           const SizedBox(height: 14),
-          if (_loading) const LoadingList()
-          else if (_error.isNotEmpty) ErrorPanel(message: _error, onRetry: _load)
+          if (_loading)
+            const LoadingList()
+          else if (_error.isNotEmpty)
+            ErrorPanel(message: _error, onRetry: _load)
           else ...[
-            SectionHeader(title: 'Gợi ý phù hợp', subtitle: '${_recommendations.length} gợi ý theo kỹ năng job'),
+            SectionHeader(
+              title: 'Gợi ý phù hợp',
+              subtitle: '${_recommendations.length} gợi ý theo kỹ năng job',
+            ),
             if (_recommendations.isEmpty)
-              const EmptyState(message: 'Chưa có gợi ý. Hãy thêm kỹ năng yêu cầu cho job.')
+              const EmptyState(
+                message: 'Chưa có gợi ý. Hãy thêm kỹ năng yêu cầu cho job.',
+              )
             else
               for (final rec in _recommendations.take(8))
-                CandidateTalentCard(
-                  candidate: asMap(rec['candidate']),
-                  config: widget.config,
-                  badge: '${textOf(rec['match_percent'], '0')}%',
-                  subtitle: 'Phù hợp với ${textOf(asMap(rec['job'])['jname'])}',
-                  onContact: () => _contact(asMap(rec['candidate']), intValue(asMap(rec['job'])['id'])),
+                Builder(
+                  builder: (context) {
+                    final candidate = candidateFromMatch(rec);
+                    return CandidateTalentCard(
+                      candidate: candidate,
+                      config: widget.config,
+                      badge: '${textOf(rec['match_percent'], '0')}%',
+                      subtitle:
+                          'Phù hợp với ${textOf(asMap(rec['job'])['jname'])}',
+                      reasons: matchReasons(rec),
+                      onContact: () => _contact(
+                        candidate,
+                        intValue(asMap(rec['job'])['id']),
+                      ),
+                    );
+                  },
                 ),
             const SizedBox(height: 12),
-            SectionHeader(title: 'Danh sách ứng viên', subtitle: '${_candidates.length} hồ sơ phù hợp bộ lọc'),
+            SectionHeader(
+              title: 'Danh sách ứng viên',
+              subtitle: '${_candidates.length} hồ sơ phù hợp bộ lọc',
+            ),
             if (_candidates.isEmpty)
               const EmptyState(message: 'Không có ứng viên phù hợp.')
             else
-              for (final candidate in _candidates)
-                CandidateTalentCard(
-                  candidate: candidate,
-                  config: widget.config,
-                  badge: textOf(candidate['match_percent']).isEmpty ? null : '${candidate['match_percent']}%',
-                  onContact: () => _contact(candidate, null),
+              for (final item in _candidates)
+                Builder(
+                  builder: (context) {
+                    final candidate = candidateFromMatch(item);
+                    return CandidateTalentCard(
+                      candidate: candidate,
+                      config: widget.config,
+                      badge: textOf(item['match_percent']).isEmpty
+                          ? null
+                          : '${item['match_percent']}%',
+                      reasons: matchReasons(item),
+                      onContact: () => _contact(candidate, null),
+                    );
+                  },
                 ),
           ],
         ],
@@ -2898,21 +4370,26 @@ class PageIntro extends StatelessWidget {
                 Text(
                   eyebrow.toUpperCase(),
                   style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: Theme.of(context).colorScheme.primary,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 0,
-                      ),
+                    color: Theme.of(context).colorScheme.primary,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0,
+                  ),
                 ),
                 const SizedBox(height: 4),
                 Text(
                   title,
                   style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.w900,
-                        color: const Color(0xFF102A27),
-                      ),
+                    fontWeight: FontWeight.w900,
+                    color: const Color(0xFF102A27),
+                  ),
                 ),
                 const SizedBox(height: 4),
-                Text(subtitle, style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.black54)),
+                Text(
+                  subtitle,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(color: Colors.black54),
+                ),
               ],
             ),
           ),
@@ -2924,7 +4401,12 @@ class PageIntro extends StatelessWidget {
 }
 
 class SectionHeader extends StatelessWidget {
-  const SectionHeader({super.key, required this.title, this.subtitle, this.trailing});
+  const SectionHeader({
+    super.key,
+    required this.title,
+    this.subtitle,
+    this.trailing,
+  });
 
   final String title;
   final String? subtitle;
@@ -2940,8 +4422,19 @@ class SectionHeader extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
-                if (subtitle != null) Text(subtitle!, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.black54)),
+                Text(
+                  title,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                if (subtitle != null)
+                  Text(
+                    subtitle!,
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall?.copyWith(color: Colors.black54),
+                  ),
               ],
             ),
           ),
@@ -2953,7 +4446,12 @@ class SectionHeader extends StatelessWidget {
 }
 
 class MetricCard extends StatelessWidget {
-  const MetricCard({super.key, required this.label, required this.value, required this.icon});
+  const MetricCard({
+    super.key,
+    required this.label,
+    required this.value,
+    required this.icon,
+  });
 
   final String label;
   final String value;
@@ -2969,7 +4467,12 @@ class MetricCard extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Icon(icon, color: Theme.of(context).colorScheme.primary),
-            Text(value, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900)),
+            Text(
+              value,
+              style: Theme.of(
+                context,
+              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900),
+            ),
             Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
           ],
         ),
@@ -2979,7 +4482,12 @@ class MetricCard extends StatelessWidget {
 }
 
 class JobCard extends StatelessWidget {
-  const JobCard({super.key, required this.job, required this.config, required this.onTap});
+  const JobCard({
+    super.key,
+    required this.job,
+    required this.config,
+    required this.onTap,
+  });
 
   final Map<String, dynamic> job;
   final ApiConfig config;
@@ -2989,6 +4497,16 @@ class JobCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final employer = asMap(job['employer']);
     final locations = listFromResponse(job, key: 'locations');
+    final branch = asMap(job['branch']);
+    final locationText = textOf(
+      job['location'],
+      textOf(
+        branch['name'],
+        locations.isEmpty
+            ? textOf(job['address'], 'Linh hoạt')
+            : locations.map((e) => textOf(e['name'])).join(', '),
+      ),
+    );
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       child: InkWell(
@@ -3001,14 +4519,31 @@ class JobCard extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  AppAvatar(url: config.resolveAssetUrl(textOf(employer['logo'])), label: textOf(employer['name'], 'Công ty'), radius: 24),
+                  AppAvatar(
+                    url: config.resolveAssetUrl(textOf(employer['logo'])),
+                    label: textOf(employer['name'], 'Công ty'),
+                    radius: 24,
+                  ),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(textOf(job['jname']), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
-                        Text(textOf(employer['name'], textOf(job['name'], 'Nhà tuyển dụng')), maxLines: 1, overflow: TextOverflow.ellipsis),
+                        Text(
+                          textOf(job['jname']),
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 16,
+                          ),
+                        ),
+                        Text(
+                          textOf(
+                            employer['name'],
+                            textOf(job['name'], 'Nhà tuyển dụng'),
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ],
                     ),
                   ),
@@ -3020,9 +4555,16 @@ class JobCard extends StatelessWidget {
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  InfoPill(icon: Icons.payments_outlined, text: salaryText(job)),
-                  InfoPill(icon: Icons.place_outlined, text: locations.isEmpty ? textOf(job['location'], 'Linh hoạt') : locations.map((e) => textOf(e['name'])).join(', ')),
-                  InfoPill(icon: Icons.event_outlined, text: 'Hạn ${textOf(job['deadline'], textOf(job['expire_at'], 'đang tuyển'))}'),
+                  InfoPill(
+                    icon: Icons.payments_outlined,
+                    text: salaryText(job),
+                  ),
+                  InfoPill(icon: Icons.place_outlined, text: locationText),
+                  InfoPill(
+                    icon: Icons.event_outlined,
+                    text:
+                        'Hạn ${textOf(job['deadline'], textOf(job['expire_at'], 'đang tuyển'))}',
+                  ),
                 ],
               ),
             ],
@@ -3034,7 +4576,13 @@ class JobCard extends StatelessWidget {
 }
 
 class CompanyCard extends StatelessWidget {
-  const CompanyCard({super.key, required this.company, required this.config, required this.onTap, this.trailing});
+  const CompanyCard({
+    super.key,
+    required this.company,
+    required this.config,
+    required this.onTap,
+    this.trailing,
+  });
 
   final Map<String, dynamic> company;
   final ApiConfig config;
@@ -3046,10 +4594,26 @@ class CompanyCard extends StatelessWidget {
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       child: ListTile(
-        leading: AppAvatar(url: config.resolveAssetUrl(textOf(company['logo'])), label: textOf(company['name']), radius: 24),
-        title: Text(textOf(company['name']), style: const TextStyle(fontWeight: FontWeight.w800)),
-        subtitle: Text(textOf(company['address'], '${textOf(company['job_num'], '0')} việc đang tuyển'), maxLines: 2, overflow: TextOverflow.ellipsis),
-        trailing: trailing == null ? const Icon(Icons.chevron_right) : Chip(label: Text(trailing!)),
+        leading: AppAvatar(
+          url: config.resolveAssetUrl(textOf(company['logo'])),
+          label: textOf(company['name']),
+          radius: 24,
+        ),
+        title: Text(
+          textOf(company['name']),
+          style: const TextStyle(fontWeight: FontWeight.w800),
+        ),
+        subtitle: Text(
+          textOf(
+            company['address'],
+            '${textOf(company['job_num'], '0')} việc đang tuyển',
+          ),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+        trailing: trailing == null
+            ? const Icon(Icons.chevron_right)
+            : Chip(label: Text(trailing!)),
         onTap: onTap,
       ),
     );
@@ -3057,7 +4621,12 @@ class CompanyCard extends StatelessWidget {
 }
 
 class AppAvatar extends StatelessWidget {
-  const AppAvatar({super.key, required this.url, required this.label, this.radius = 24});
+  const AppAvatar({
+    super.key,
+    required this.url,
+    required this.label,
+    this.radius = 24,
+  });
 
   final String url;
   final String label;
@@ -3067,14 +4636,21 @@ class AppAvatar extends StatelessWidget {
   Widget build(BuildContext context) {
     final initials = label.trim().isEmpty
         ? '?'
-        : label.trim().split(RegExp(r'\s+')).take(2).map((part) => part.characters.first.toUpperCase()).join();
+        : label
+              .trim()
+              .split(RegExp(r'\s+'))
+              .take(2)
+              .map((part) => part.characters.first.toUpperCase())
+              .join();
     return CircleAvatar(
       radius: radius,
       backgroundColor: const Color(0xFFE3F4EF),
       foregroundColor: const Color(0xFF0F766E),
       backgroundImage: url.isEmpty ? null : NetworkImage(url),
       onBackgroundImageError: url.isEmpty ? null : (exception, stackTrace) {},
-      child: url.isEmpty ? Text(initials, style: const TextStyle(fontWeight: FontWeight.w900)) : null,
+      child: url.isEmpty
+          ? Text(initials, style: const TextStyle(fontWeight: FontWeight.w900))
+          : null,
     );
   }
 }
@@ -3144,7 +4720,11 @@ class EmptyState extends StatelessWidget {
         child: Center(
           child: Column(
             children: [
-              Icon(Icons.inbox_outlined, size: 42, color: Theme.of(context).colorScheme.primary),
+              Icon(
+                Icons.inbox_outlined,
+                size: 42,
+                color: Theme.of(context).colorScheme.primary,
+              ),
               const SizedBox(height: 8),
               Text(message, textAlign: TextAlign.center),
             ],
@@ -3169,11 +4749,20 @@ class ErrorPanel extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Không tải được dữ liệu', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
+            Text(
+              'Không tải được dữ liệu',
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+            ),
             const SizedBox(height: 6),
             Text(message),
             const SizedBox(height: 10),
-            OutlinedButton.icon(onPressed: onRetry, icon: const Icon(Icons.refresh), label: const Text('Thử lại')),
+            OutlinedButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Thử lại'),
+            ),
           ],
         ),
       ),
@@ -3204,7 +4793,10 @@ class ProfileSectionPanel extends StatelessWidget {
       children: [
         SectionHeader(
           title: section.label,
-          trailing: IconButton.filledTonal(onPressed: onAdd, icon: const Icon(Icons.add)),
+          trailing: IconButton.filledTonal(
+            onPressed: onAdd,
+            icon: const Icon(Icons.add),
+          ),
         ),
         if (items.isEmpty)
           EmptyState(message: 'Chưa có ${section.label.toLowerCase()}.')
@@ -3212,12 +4804,25 @@ class ProfileSectionPanel extends StatelessWidget {
           for (final item in items)
             Card(
               child: ListTile(
-                title: Text(section.titleOf(item), style: const TextStyle(fontWeight: FontWeight.w700)),
-                subtitle: Text(section.subtitleOf(item), maxLines: 2, overflow: TextOverflow.ellipsis),
+                title: Text(
+                  section.titleOf(item),
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                subtitle: Text(
+                  section.subtitleOf(item),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
                 trailing: Wrap(
                   children: [
-                    IconButton(onPressed: () => onEdit(item), icon: const Icon(Icons.edit_outlined)),
-                    IconButton(onPressed: () => onDelete(item), icon: const Icon(Icons.delete_outline)),
+                    IconButton(
+                      onPressed: () => onEdit(item),
+                      icon: const Icon(Icons.edit_outlined),
+                    ),
+                    IconButton(
+                      onPressed: () => onDelete(item),
+                      icon: const Icon(Icons.delete_outline),
+                    ),
                   ],
                 ),
               ),
@@ -3255,22 +4860,46 @@ class CandidateApplicationCard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(fullName(item), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+                      Text(
+                        fullName(item),
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 16,
+                        ),
+                      ),
                       Text(textOf(item['jname'])),
-                      Text('${textOf(item['email'])} • ${textOf(item['phone'], 'Chưa có SĐT')}'),
+                      Text(
+                        '${textOf(item['email'])} • ${textOf(item['phone'], 'Chưa có SĐT')}',
+                      ),
                     ],
                   ),
                 ),
-                Chip(label: Text(applicationStatusText(textOf(item['status'])))),
+                Chip(
+                  label: Text(applicationStatusText(textOf(item['status']))),
+                ),
               ],
             ),
             const SizedBox(height: 10),
             Wrap(
               spacing: 8,
               children: [
-                OutlinedButton.icon(onPressed: onView, icon: const Icon(Icons.visibility_outlined), label: const Text('Xem CV')),
-                if (onAccept != null) FilledButton.icon(onPressed: onAccept, icon: const Icon(Icons.check), label: const Text('Chấp nhận')),
-                if (onReject != null) OutlinedButton.icon(onPressed: onReject, icon: const Icon(Icons.close), label: const Text('Từ chối')),
+                OutlinedButton.icon(
+                  onPressed: onView,
+                  icon: const Icon(Icons.visibility_outlined),
+                  label: const Text('Xem CV'),
+                ),
+                if (onAccept != null)
+                  FilledButton.icon(
+                    onPressed: onAccept,
+                    icon: const Icon(Icons.check),
+                    label: const Text('Chấp nhận'),
+                  ),
+                if (onReject != null)
+                  OutlinedButton.icon(
+                    onPressed: onReject,
+                    icon: const Icon(Icons.close),
+                    label: const Text('Từ chối'),
+                  ),
               ],
             ),
           ],
@@ -3288,6 +4917,7 @@ class CandidateTalentCard extends StatelessWidget {
     required this.onContact,
     this.badge,
     this.subtitle,
+    this.reasons = const [],
   });
 
   final Map<String, dynamic> candidate;
@@ -3295,10 +4925,13 @@ class CandidateTalentCard extends StatelessWidget {
   final VoidCallback onContact;
   final String? badge;
   final String? subtitle;
+  final List<String> reasons;
 
   @override
   Widget build(BuildContext context) {
-    final skills = listFromAny(candidate['skills']).map((e) => textOf(e)).where((e) => e.isNotEmpty).take(5).toList();
+    final skills = listFromAny(
+      candidate['skills'],
+    ).map((e) => textOf(e)).where((e) => e.isNotEmpty).take(5).toList();
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(14),
@@ -3307,14 +4940,27 @@ class CandidateTalentCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                AppAvatar(url: config.resolveAssetUrl(textOf(candidate['avatar'])), label: fullName(candidate), radius: 28),
+                AppAvatar(
+                  url: config.resolveAssetUrl(textOf(candidate['avatar'])),
+                  label: fullName(candidate),
+                  radius: 28,
+                ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(fullName(candidate), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
-                      Text(subtitle ?? '${textOf(candidate['email'])} • ${textOf(candidate['phone'], 'Chưa có SĐT')}'),
+                      Text(
+                        fullName(candidate),
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 16,
+                        ),
+                      ),
+                      Text(
+                        subtitle ??
+                            '${textOf(candidate['email'])} • ${textOf(candidate['phone'], 'Chưa có SĐT')}',
+                      ),
                     ],
                   ),
                 ),
@@ -3323,21 +4969,44 @@ class CandidateTalentCard extends StatelessWidget {
             ),
             if (textOf(candidate['objective']).isNotEmpty) ...[
               const SizedBox(height: 8),
-              Text(textOf(candidate['objective']), maxLines: 2, overflow: TextOverflow.ellipsis),
+              Text(
+                textOf(candidate['objective']),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
             ],
             const SizedBox(height: 10),
             Wrap(
               spacing: 6,
               runSpacing: 6,
               children: [
-                if (skills.isEmpty) const Chip(label: Text('Chưa cập nhật kỹ năng')),
+                if (skills.isEmpty)
+                  const Chip(label: Text('Chưa cập nhật kỹ năng')),
                 for (final skill in skills) Chip(label: Text(skill)),
               ],
             ),
+            if (reasons.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final reason in reasons.take(3))
+                    Chip(
+                      avatar: const Icon(Icons.check_circle_outline, size: 16),
+                      label: Text(reason),
+                    ),
+                ],
+              ),
+            ],
             const SizedBox(height: 8),
             Align(
               alignment: Alignment.centerRight,
-              child: FilledButton.icon(onPressed: onContact, icon: const Icon(Icons.mail_outline), label: const Text('Liên hệ')),
+              child: FilledButton.icon(
+                onPressed: onContact,
+                icon: const Icon(Icons.mail_outline),
+                label: const Text('Liên hệ'),
+              ),
             ),
           ],
         ),
@@ -3361,18 +5030,31 @@ Future<void> showJobDetailSheet(
       future: Future.wait([
         api.jobDetail(jobId),
         api.jobSkills(jobId),
-        if (session.isCandidate) api.checkApplying(jobId) else Future.value(false),
+        if (session.isCandidate)
+          api.checkApplying(jobId)
+        else
+          Future.value(false),
         if (session.isCandidate) api.checkSaved(jobId) else Future.value(false),
-        if (session.isCandidate) api.resumes() else Future.value(<Map<String, dynamic>>[]),
+        if (session.isCandidate)
+          api.resumes()
+        else
+          Future.value(<Map<String, dynamic>>[]),
       ]),
       builder: (context, snapshot) {
         if (!snapshot.hasData) {
-          return const SizedBox(height: 260, child: Center(child: CircularProgressIndicator()));
+          return const SizedBox(
+            height: 260,
+            child: Center(child: CircularProgressIndicator()),
+          );
         }
         if (snapshot.hasError) {
-          return Padding(padding: const EdgeInsets.all(24), child: Text(snapshot.error.toString()));
+          return Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(snapshot.error.toString()),
+          );
         }
         final job = asMap(snapshot.data![0]);
+        final branch = asMap(job['branch']);
         final skills = snapshot.data![1] as List<Map<String, dynamic>>;
         var applied = snapshot.data![2] as bool;
         var saved = snapshot.data![3] as bool;
@@ -3387,7 +5069,12 @@ Future<void> showJobDetailSheet(
               controller: controller,
               padding: const EdgeInsets.all(18),
               children: [
-                Text(textOf(job['jname']), style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900)),
+                Text(
+                  textOf(job['jname']),
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
                 const SizedBox(height: 6),
                 Text(textOf(asMap(job['employer'])['name'], 'Nhà tuyển dụng')),
                 const SizedBox(height: 12),
@@ -3395,17 +5082,42 @@ Future<void> showJobDetailSheet(
                   spacing: 8,
                   runSpacing: 8,
                   children: [
-                    InfoPill(icon: Icons.payments_outlined, text: salaryText(job)),
-                    InfoPill(icon: Icons.place_outlined, text: textOf(job['location'], textOf(job['address']))),
-                    InfoPill(icon: Icons.event_outlined, text: 'Hạn ${textOf(job['expire_at'])}'),
-                    InfoPill(icon: Icons.people_outline, text: '${textOf(job['amount'], '0')} người'),
+                    InfoPill(
+                      icon: Icons.payments_outlined,
+                      text: salaryText(job),
+                    ),
+                    InfoPill(
+                      icon: Icons.place_outlined,
+                      text: textOf(
+                        job['location'],
+                        textOf(branch['name'], textOf(job['address'])),
+                      ),
+                    ),
+                    InfoPill(
+                      icon: Icons.event_outlined,
+                      text: 'Hạn ${textOf(job['expire_at'])}',
+                    ),
+                    InfoPill(
+                      icon: Icons.people_outline,
+                      text: '${textOf(job['amount'], '0')} người',
+                    ),
                   ],
                 ),
                 const SizedBox(height: 12),
                 if (skills.isNotEmpty)
-                  Wrap(spacing: 6, runSpacing: 6, children: [for (final skill in skills) Chip(label: Text(textOf(skill['name'])))]),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      for (final skill in skills)
+                        Chip(label: Text(textOf(skill['name']))),
+                    ],
+                  ),
                 const SizedBox(height: 12),
-                Text(textOf(job['description']), style: Theme.of(context).textTheme.bodyMedium),
+                Text(
+                  textOf(job['description']),
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
                 const SizedBox(height: 18),
                 if (session.isCandidate)
                   Row(
@@ -3417,10 +5129,16 @@ Future<void> showJobDetailSheet(
                               await api.setSavedJob(jobId, !saved);
                               setSheetState(() => saved = !saved);
                             } catch (error) {
-                              showSnack(context, error.toString(), isError: true);
+                              showSnack(
+                                context,
+                                error.toString(),
+                                isError: true,
+                              );
                             }
                           },
-                          icon: Icon(saved ? Icons.bookmark : Icons.bookmark_border),
+                          icon: Icon(
+                            saved ? Icons.bookmark : Icons.bookmark_border,
+                          ),
                           label: Text(saved ? 'Đã lưu' : 'Lưu việc'),
                         ),
                       ),
@@ -3430,8 +5148,15 @@ Future<void> showJobDetailSheet(
                           onPressed: applied
                               ? null
                               : () async {
-                                  final success = await showApplyDialog(context, api, jobId, resumes);
-                                  if (success) setSheetState(() => applied = true);
+                                  final success = await showApplyDialog(
+                                    context,
+                                    api,
+                                    jobId,
+                                    resumes,
+                                  );
+                                  if (success) {
+                                    setSheetState(() => applied = true);
+                                  }
                                 },
                           icon: const Icon(Icons.send_outlined),
                           label: Text(applied ? 'Đã ứng tuyển' : 'Ứng tuyển'),
@@ -3454,16 +5179,27 @@ Future<void> showJobDetailSheet(
   );
 }
 
-Future<void> showCompanyDetailSheet(BuildContext context, RecruitmentApi api, ApiConfig config, int companyId) async {
+Future<void> showCompanyDetailSheet(
+  BuildContext context,
+  RecruitmentApi api,
+  ApiConfig config,
+  int companyId,
+) async {
   if (companyId == 0) return;
   showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     builder: (context) => FutureBuilder<List<dynamic>>(
-      future: Future.wait([api.companyDetail(companyId), api.companyJobs(companyId)]),
+      future: Future.wait([
+        api.companyDetail(companyId),
+        api.companyJobs(companyId),
+      ]),
       builder: (context, snapshot) {
         if (!snapshot.hasData) {
-          return const SizedBox(height: 260, child: Center(child: CircularProgressIndicator()));
+          return const SizedBox(
+            height: 260,
+            child: Center(child: CircularProgressIndicator()),
+          );
         }
         final company = asMap(snapshot.data![0]);
         final jobs = snapshot.data![1] as List<Map<String, dynamic>>;
@@ -3474,9 +5210,19 @@ Future<void> showCompanyDetailSheet(BuildContext context, RecruitmentApi api, Ap
             controller: controller,
             padding: const EdgeInsets.all(18),
             children: [
-              AppAvatar(url: config.resolveAssetUrl(textOf(company['logo'])), label: textOf(company['name']), radius: 36),
+              AppAvatar(
+                url: config.resolveAssetUrl(textOf(company['logo'])),
+                label: textOf(company['name']),
+                radius: 36,
+              ),
               const SizedBox(height: 12),
-              Text(textOf(company['name']), style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900), textAlign: TextAlign.center),
+              Text(
+                textOf(company['name']),
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.w900,
+                ),
+                textAlign: TextAlign.center,
+              ),
               const SizedBox(height: 6),
               Text(textOf(company['address']), textAlign: TextAlign.center),
               const SizedBox(height: 10),
@@ -3491,13 +5237,18 @@ Future<void> showCompanyDetailSheet(BuildContext context, RecruitmentApi api, Ap
               const SizedBox(height: 12),
               Text(textOf(company['description'], 'Chưa có mô tả công ty.')),
               const SizedBox(height: 16),
-              SectionHeader(title: 'Tin đang tuyển', subtitle: '${jobs.length} vị trí'),
+              SectionHeader(
+                title: 'Tin đang tuyển',
+                subtitle: '${jobs.length} vị trí',
+              ),
               for (final job in jobs)
                 Card(
                   child: ListTile(
                     leading: const Icon(Icons.work_outline),
                     title: Text(textOf(job['jname'])),
-                    subtitle: Text('${salaryText(job)} • Hạn ${textOf(job['deadline'], textOf(job['expire_at']))}'),
+                    subtitle: Text(
+                      '${salaryText(job)} • Hạn ${textOf(job['deadline'], textOf(job['expire_at']))}',
+                    ),
                   ),
                 ),
             ],
@@ -3528,11 +5279,19 @@ Future<bool> showApplyDialog(
             if (resumes.isNotEmpty)
               DropdownButtonFormField<int>(
                 initialValue: resumeId,
-                decoration: const InputDecoration(labelText: 'CV đã tạo (tùy chọn)'),
+                decoration: const InputDecoration(
+                  labelText: 'CV đã tạo (tùy chọn)',
+                ),
                 items: [
-                  const DropdownMenuItem<int>(value: null, child: Text('Không chọn')),
+                  const DropdownMenuItem<int>(
+                    value: null,
+                    child: Text('Không chọn'),
+                  ),
                   for (final resume in resumes)
-                    DropdownMenuItem(value: intValue(resume['id']), child: Text(textOf(resume['title'], 'CV'))),
+                    DropdownMenuItem(
+                      value: intValue(resume['id']),
+                      child: Text(textOf(resume['title'], 'CV')),
+                    ),
                 ],
                 onChanged: (value) => setState(() => resumeId = value),
               ),
@@ -3541,7 +5300,10 @@ Future<bool> showApplyDialog(
               onPressed: sending
                   ? null
                   : () async {
-                      final file = await pickUploadFile('cv', extensions: ['pdf']);
+                      final file = await pickUploadFile(
+                        'cv',
+                        extensions: ['pdf'],
+                      );
                       if (file != null) setState(() => cv = file);
                     },
               icon: const Icon(Icons.attach_file),
@@ -3550,7 +5312,10 @@ Future<bool> showApplyDialog(
           ],
         ),
         actions: [
-          TextButton(onPressed: sending ? null : () => Navigator.pop(context, false), child: const Text('Hủy')),
+          TextButton(
+            onPressed: sending ? null : () => Navigator.pop(context, false),
+            child: const Text('Hủy'),
+          ),
           FilledButton(
             onPressed: sending || cv == null
                 ? null
@@ -3574,7 +5339,11 @@ Future<bool> showApplyDialog(
   return result == true;
 }
 
-Future<void> showApiSettingsDialog(BuildContext context, ApiConfig config, RecruitmentApi api) async {
+Future<void> showApiSettingsDialog(
+  BuildContext context,
+  ApiConfig config,
+  RecruitmentApi api,
+) async {
   final controller = TextEditingController(text: config.baseUrl);
   var testing = false;
   await showDialog<void>(
@@ -3594,11 +5363,16 @@ Future<void> showApiSettingsDialog(BuildContext context, ApiConfig config, Recru
               ),
             ),
             const SizedBox(height: 10),
-            const Text('Laravel cần chạy bằng php artisan serve --host=0.0.0.0 --port=8000 để điện thoại trong LAN truy cập được.'),
+            const Text(
+              'Laravel cần chạy bằng php artisan serve --host=0.0.0.0 --port=8000 để điện thoại trong LAN truy cập được.',
+            ),
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Đóng')),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Đóng'),
+          ),
           OutlinedButton(
             onPressed: testing
                 ? null
@@ -3650,7 +5424,16 @@ class ProfileSection {
 
   String subtitleOf(Map<String, dynamic> item) {
     final values = <String>[];
-    for (final key in ['major', 'company', 'role', 'technologies', 'description', 'start_date', 'end_date', 'receive_date']) {
+    for (final key in [
+      'major',
+      'company',
+      'role',
+      'technologies',
+      'description',
+      'start_date',
+      'end_date',
+      'receive_date',
+    ]) {
       final value = textOf(item[key]);
       if (value.isNotEmpty) values.add(value);
     }
@@ -3659,7 +5442,13 @@ class ProfileSection {
 }
 
 class FieldSpec {
-  const FieldSpec(this.key, this.label, {this.maxLines = 1, this.number = false, this.boolean = false});
+  const FieldSpec(
+    this.key,
+    this.label, {
+    this.maxLines = 1,
+    this.number = false,
+    this.boolean = false,
+  });
 
   final String key;
   final String label;
@@ -3722,20 +5511,29 @@ const profileSections = [
   ], Icons.more_horiz),
 ];
 
-Future<SectionDialogResult?> showSectionDialog(BuildContext context, ProfileSection section, Map<String, dynamic>? item) async {
+Future<SectionDialogResult?> showSectionDialog(
+  BuildContext context,
+  ProfileSection section,
+  Map<String, dynamic>? item,
+) async {
   final controllers = {
     for (final field in section.fields.where((field) => !field.boolean))
       field.key: TextEditingController(text: textOf(item?[field.key])),
   };
   final boolValues = {
-    for (final field in section.fields.where((field) => field.boolean)) field.key: boolValue(item?[field.key]),
+    for (final field in section.fields.where((field) => field.boolean))
+      field.key: boolValue(item?[field.key]),
   };
   UploadFile? image;
   final result = await showDialog<SectionDialogResult>(
     context: context,
     builder: (context) => StatefulBuilder(
       builder: (context, setState) => AlertDialog(
-        title: Text(item == null ? 'Thêm ${section.label.toLowerCase()}' : 'Sửa ${section.label.toLowerCase()}'),
+        title: Text(
+          item == null
+              ? 'Thêm ${section.label.toLowerCase()}'
+              : 'Sửa ${section.label.toLowerCase()}',
+        ),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -3746,20 +5544,27 @@ Future<SectionDialogResult?> showSectionDialog(BuildContext context, ProfileSect
                   child: field.boolean
                       ? CheckboxListTile(
                           value: boolValues[field.key] ?? false,
-                          onChanged: (value) => setState(() => boolValues[field.key] = value ?? false),
+                          onChanged: (value) => setState(
+                            () => boolValues[field.key] = value ?? false,
+                          ),
                           title: Text(field.label),
                         )
                       : TextField(
                           controller: controllers[field.key],
                           maxLines: field.maxLines,
-                          keyboardType: field.number ? TextInputType.number : TextInputType.text,
+                          keyboardType: field.number
+                              ? TextInputType.number
+                              : TextInputType.text,
                           decoration: InputDecoration(labelText: field.label),
                         ),
                 ),
               if (section.key == 'certificates' || section.key == 'prizes')
                 OutlinedButton.icon(
                   onPressed: () async {
-                    final file = await pickUploadFile('image', extensions: ['jpg', 'jpeg', 'png', 'webp']);
+                    final file = await pickUploadFile(
+                      'image',
+                      extensions: ['jpg', 'jpeg', 'png', 'webp'],
+                    );
                     if (file != null) setState(() => image = file);
                   },
                   icon: const Icon(Icons.image_outlined),
@@ -3769,7 +5574,10 @@ Future<SectionDialogResult?> showSectionDialog(BuildContext context, ProfileSect
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Hủy')),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Hủy'),
+          ),
           FilledButton(
             onPressed: () {
               final fields = <String, dynamic>{};
@@ -3778,7 +5586,9 @@ Future<SectionDialogResult?> showSectionDialog(BuildContext context, ProfileSect
                   fields[field.key] = boolValues[field.key] == true ? 1 : 0;
                 } else {
                   final value = controllers[field.key]!.text.trim();
-                  fields[field.key] = field.number && value.isNotEmpty ? int.tryParse(value) : value;
+                  fields[field.key] = field.number && value.isNotEmpty
+                      ? int.tryParse(value)
+                      : value;
                 }
               }
               Navigator.pop(context, SectionDialogResult(fields, image));
@@ -3809,6 +5619,7 @@ class CandidatePersonalResult {
 
 Future<CandidatePersonalResult?> showCandidatePersonalDialog(
   BuildContext context,
+  RecruitmentApi api,
   ApiConfig config,
   Map<String, dynamic> personal,
 ) async {
@@ -3826,10 +5637,13 @@ Future<CandidatePersonalResult?> showCandidatePersonalDialog(
     const FieldSpec('objective', 'Mục tiêu nghề nghiệp', maxLines: 4),
   ];
   final controllers = {
-    for (final spec in specs) spec.key: TextEditingController(text: textOf(personal[spec.key])),
+    for (final spec in specs)
+      spec.key: TextEditingController(text: textOf(personal[spec.key])),
   };
   UploadFile? image;
   var deleteImage = false;
+  final mapUrl = TextEditingController();
+  var resolving = false;
   final result = await showDialog<CandidatePersonalResult>(
     context: context,
     builder: (context) => StatefulBuilder(
@@ -3845,16 +5659,68 @@ Future<CandidatePersonalResult?> showCandidatePersonalDialog(
                   child: TextField(
                     controller: controllers[spec.key],
                     maxLines: spec.maxLines,
-                    keyboardType: spec.number ? TextInputType.number : TextInputType.text,
+                    keyboardType: spec.number
+                        ? TextInputType.number
+                        : TextInputType.text,
                     decoration: InputDecoration(labelText: spec.label),
                   ),
                 ),
+              TextField(
+                controller: mapUrl,
+                decoration: InputDecoration(
+                  labelText: 'Link chia sẻ Google Maps',
+                  helperText:
+                      'Dùng để tự lấy tọa độ hồ sơ, không cần nhập vĩ độ/kinh độ thủ công.',
+                  suffixIcon: IconButton(
+                    tooltip: 'Lấy tọa độ',
+                    onPressed: resolving
+                        ? null
+                        : () async {
+                            if (mapUrl.text.trim().isEmpty) return;
+                            setState(() => resolving = true);
+                            try {
+                              final resolved = await api
+                                  .resolveCandidateMapLink(mapUrl.text.trim());
+                              controllers['map_lat']!.text = textOf(
+                                resolved['lat'],
+                              );
+                              controllers['map_lng']!.text = textOf(
+                                resolved['lng'],
+                              );
+                              showSnack(
+                                context,
+                                'Đã lấy tọa độ từ Google Maps.',
+                              );
+                            } catch (error) {
+                              showSnack(
+                                context,
+                                error.toString(),
+                                isError: true,
+                              );
+                            } finally {
+                              setState(() => resolving = false);
+                            }
+                          },
+                    icon: resolving
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.my_location_outlined),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
               Row(
                 children: [
                   Expanded(
                     child: OutlinedButton.icon(
                       onPressed: () async {
-                        final file = await pickUploadFile('image', extensions: ['jpg', 'jpeg', 'png', 'webp']);
+                        final file = await pickUploadFile(
+                          'image',
+                          extensions: ['jpg', 'jpeg', 'png', 'webp'],
+                        );
                         if (file != null) setState(() => image = file);
                       },
                       icon: const Icon(Icons.image_outlined),
@@ -3865,14 +5731,18 @@ Future<CandidatePersonalResult?> showCandidatePersonalDialog(
               ),
               CheckboxListTile(
                 value: deleteImage,
-                onChanged: (value) => setState(() => deleteImage = value ?? false),
+                onChanged: (value) =>
+                    setState(() => deleteImage = value ?? false),
                 title: const Text('Xóa avatar hiện tại'),
               ),
             ],
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Hủy')),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Hủy'),
+          ),
           FilledButton(
             onPressed: () {
               final fields = <String, dynamic>{};
@@ -3891,6 +5761,339 @@ Future<CandidatePersonalResult?> showCandidatePersonalDialog(
   for (final controller in controllers.values) {
     controller.dispose();
   }
+  mapUrl.dispose();
+  return result;
+}
+
+Future<Map<String, dynamic>?> showBranchDialog(
+  BuildContext context,
+  RecruitmentApi api,
+  Map<String, dynamic>? branch,
+) async {
+  final controllers = {
+    'name': TextEditingController(text: textOf(branch?['name'])),
+    'address': TextEditingController(text: textOf(branch?['address'])),
+    'contact_name': TextEditingController(
+      text: textOf(branch?['contact_name']),
+    ),
+    'phone': TextEditingController(text: textOf(branch?['phone'])),
+    'email': TextEditingController(text: textOf(branch?['email'])),
+    'map_lat': TextEditingController(text: textOf(branch?['map_lat'])),
+    'map_lng': TextEditingController(text: textOf(branch?['map_lng'])),
+  };
+  final mapUrl = TextEditingController();
+  var isActive = branch == null ? true : boolValue(branch['is_active']);
+  var resolving = false;
+
+  final result = await showDialog<Map<String, dynamic>>(
+    context: context,
+    builder: (context) => StatefulBuilder(
+      builder: (context, setState) => AlertDialog(
+        title: Text(branch == null ? 'Thêm chi nhánh' : 'Cập nhật chi nhánh'),
+        content: SizedBox(
+          width: 560,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                textField(
+                  controllers['name']!,
+                  'Tên chi nhánh',
+                  validator: requiredValidator,
+                ),
+                const SizedBox(height: 10),
+                textField(
+                  controllers['address']!,
+                  'Địa chỉ',
+                  maxLines: 2,
+                  validator: requiredValidator,
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: textField(
+                        controllers['contact_name']!,
+                        'Người liên hệ',
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: textField(
+                        controllers['phone']!,
+                        'Điện thoại',
+                        keyboardType: TextInputType.phone,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                textField(
+                  controllers['email']!,
+                  'Email chi nhánh',
+                  keyboardType: TextInputType.emailAddress,
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: mapUrl,
+                  decoration: InputDecoration(
+                    labelText: 'Link chia sẻ Google Maps',
+                    helperText:
+                        'Dán link maps.app.goo.gl hoặc google.com/maps để tự lấy tọa độ.',
+                    suffixIcon: IconButton(
+                      tooltip: 'Lấy tọa độ',
+                      onPressed: resolving
+                          ? null
+                          : () async {
+                              if (mapUrl.text.trim().isEmpty) return;
+                              setState(() => resolving = true);
+                              try {
+                                final resolved = await api
+                                    .resolveEmployerMapLink(mapUrl.text.trim());
+                                controllers['map_lat']!.text = textOf(
+                                  resolved['lat'],
+                                );
+                                controllers['map_lng']!.text = textOf(
+                                  resolved['lng'],
+                                );
+                                showSnack(
+                                  context,
+                                  'Đã lấy tọa độ từ Google Maps.',
+                                );
+                              } catch (error) {
+                                showSnack(
+                                  context,
+                                  error.toString(),
+                                  isError: true,
+                                );
+                              } finally {
+                                setState(() => resolving = false);
+                              }
+                            },
+                      icon: resolving
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.my_location_outlined),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Wrap(
+                    spacing: 8,
+                    children: [
+                      Chip(
+                        label: Text(
+                          'Vĩ độ: ${textOf(controllers['map_lat']!.text, 'chưa có')}',
+                        ),
+                      ),
+                      Chip(
+                        label: Text(
+                          'Kinh độ: ${textOf(controllers['map_lng']!.text, 'chưa có')}',
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: isActive,
+                  onChanged: (value) => setState(() => isActive = value),
+                  title: const Text('Chi nhánh đang hoạt động'),
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Hủy'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(context, {
+                'name': controllers['name']!.text.trim(),
+                'address': controllers['address']!.text.trim(),
+                'contact_name': controllers['contact_name']!.text.trim(),
+                'phone': controllers['phone']!.text.trim(),
+                'email': controllers['email']!.text.trim(),
+                'map_lat': controllers['map_lat']!.text.trim(),
+                'map_lng': controllers['map_lng']!.text.trim(),
+                'is_active': isActive,
+              });
+            },
+            child: const Text('Lưu'),
+          ),
+        ],
+      ),
+    ),
+  );
+
+  for (final controller in [...controllers.values, mapUrl]) {
+    controller.dispose();
+  }
+  return result;
+}
+
+Future<Map<String, dynamic>?> showMemberDialog(
+  BuildContext context, {
+  required List<Map<String, dynamic>> branches,
+  required String actorRole,
+  Map<String, dynamic>? member,
+}) async {
+  final user = asMap(member?['user']);
+  final controllers = {
+    'email': TextEditingController(text: textOf(user['email'])),
+    'password': TextEditingController(),
+    'name': TextEditingController(text: textOf(member?['name'])),
+    'phone': TextEditingController(text: textOf(member?['phone'])),
+    'title': TextEditingController(text: textOf(member?['title'])),
+  };
+  final roles = actorRole == 'company_owner'
+      ? ['branch_manager', 'branch_hr']
+      : ['branch_hr'];
+  var role = textOf(member?['role'], roles.first);
+  if (!roles.contains(role)) role = roles.first;
+  var branchId =
+      intValue(member?['branch_id']) ?? intValue(branches.firstOrNull?['id']);
+  var status = textOf(member?['status'], 'active');
+
+  final result = await showDialog<Map<String, dynamic>>(
+    context: context,
+    builder: (context) => StatefulBuilder(
+      builder: (context, setState) => AlertDialog(
+        title: Text(member == null ? 'Tạo tài khoản HR' : 'Cập nhật tài khoản'),
+        content: SizedBox(
+          width: 520,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (member == null) ...[
+                  textField(
+                    controllers['email']!,
+                    'Email đăng nhập',
+                    keyboardType: TextInputType.emailAddress,
+                    validator: requiredValidator,
+                  ),
+                  const SizedBox(height: 10),
+                ],
+                textField(
+                  controllers['name']!,
+                  'Họ tên',
+                  validator: requiredValidator,
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: textField(
+                        controllers['phone']!,
+                        'Điện thoại',
+                        keyboardType: TextInputType.phone,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: textField(controllers['title']!, 'Chức danh'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<String>(
+                  initialValue: role,
+                  decoration: const InputDecoration(labelText: 'Vai trò'),
+                  items: [
+                    for (final item in roles)
+                      DropdownMenuItem(
+                        value: item,
+                        child: Text(memberRoleText(item)),
+                      ),
+                  ],
+                  onChanged: (value) => setState(() => role = value ?? role),
+                ),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<int>(
+                  initialValue: branchId,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'Chi nhánh'),
+                  items: [
+                    for (final branch in branches)
+                      DropdownMenuItem(
+                        value: intValue(branch['id']),
+                        child: Text(textOf(branch['name'])),
+                      ),
+                  ],
+                  onChanged: (value) => setState(() => branchId = value),
+                ),
+                const SizedBox(height: 10),
+                textField(
+                  controllers['password']!,
+                  member == null
+                      ? 'Mật khẩu (bỏ trống để tự sinh)'
+                      : 'Mật khẩu mới (nếu cần đổi)',
+                  obscureText: true,
+                ),
+                const SizedBox(height: 10),
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(
+                      value: 'active',
+                      label: Text('Hoạt động'),
+                      icon: Icon(Icons.check_circle_outline),
+                    ),
+                    ButtonSegment(
+                      value: 'inactive',
+                      label: Text('Khóa'),
+                      icon: Icon(Icons.lock_outline),
+                    ),
+                  ],
+                  selected: {status},
+                  onSelectionChanged: (value) =>
+                      setState(() => status = value.first),
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Hủy'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final data = <String, dynamic>{
+                'name': controllers['name']!.text.trim(),
+                'phone': controllers['phone']!.text.trim(),
+                'title': controllers['title']!.text.trim(),
+                'role': role,
+                'branch_id': branchId,
+                'status': status,
+              };
+              if (member == null) {
+                data['email'] = controllers['email']!.text.trim();
+              }
+              if (controllers['password']!.text.trim().isNotEmpty) {
+                data['password'] = controllers['password']!.text.trim();
+              }
+              Navigator.pop(context, data);
+            },
+            child: const Text('Lưu'),
+          ),
+        ],
+      ),
+    ),
+  );
+
+  for (final controller in controllers.values) {
+    controller.dispose();
+  }
   return result;
 }
 
@@ -3903,6 +6106,7 @@ class EmployerProfileResult {
 
 Future<EmployerProfileResult?> showEmployerProfileDialog(
   BuildContext context,
+  RecruitmentApi api,
   ApiConfig config,
   Map<String, dynamic> employer,
 ) async {
@@ -3919,10 +6123,13 @@ Future<EmployerProfileResult?> showEmployerProfileDialog(
     const FieldSpec('description', 'Mô tả công ty', maxLines: 5),
   ];
   final controllers = {
-    for (final spec in specs) spec.key: TextEditingController(text: textOf(employer[spec.key])),
+    for (final spec in specs)
+      spec.key: TextEditingController(text: textOf(employer[spec.key])),
   };
   UploadFile? logo;
   UploadFile? image;
+  final mapUrl = TextEditingController();
+  var resolving = false;
   final result = await showDialog<EmployerProfileResult>(
     context: context,
     builder: (context) => StatefulBuilder(
@@ -3938,16 +6145,69 @@ Future<EmployerProfileResult?> showEmployerProfileDialog(
                   child: TextField(
                     controller: controllers[spec.key],
                     maxLines: spec.maxLines,
-                    keyboardType: spec.number ? TextInputType.number : TextInputType.text,
+                    keyboardType: spec.number
+                        ? TextInputType.number
+                        : TextInputType.text,
                     decoration: InputDecoration(labelText: spec.label),
                   ),
                 ),
+              TextField(
+                controller: mapUrl,
+                decoration: InputDecoration(
+                  labelText: 'Link chia sẻ Google Maps',
+                  helperText:
+                      'Dán link Google Maps để tự cập nhật tọa độ trụ sở.',
+                  suffixIcon: IconButton(
+                    tooltip: 'Lấy tọa độ',
+                    onPressed: resolving
+                        ? null
+                        : () async {
+                            if (mapUrl.text.trim().isEmpty) return;
+                            setState(() => resolving = true);
+                            try {
+                              final resolved = await api.resolveEmployerMapLink(
+                                mapUrl.text.trim(),
+                              );
+                              controllers['map_lat']!.text = textOf(
+                                resolved['lat'],
+                              );
+                              controllers['map_lng']!.text = textOf(
+                                resolved['lng'],
+                              );
+                              showSnack(
+                                context,
+                                'Đã lấy tọa độ từ Google Maps.',
+                              );
+                            } catch (error) {
+                              showSnack(
+                                context,
+                                error.toString(),
+                                isError: true,
+                              );
+                            } finally {
+                              setState(() => resolving = false);
+                            }
+                          },
+                    icon: resolving
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.my_location_outlined),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
               Row(
                 children: [
                   Expanded(
                     child: OutlinedButton.icon(
                       onPressed: () async {
-                        final file = await pickUploadFile('logo', extensions: ['jpg', 'jpeg', 'png', 'webp']);
+                        final file = await pickUploadFile(
+                          'logo',
+                          extensions: ['jpg', 'jpeg', 'png', 'webp'],
+                        );
                         if (file != null) setState(() => logo = file);
                       },
                       icon: const Icon(Icons.badge_outlined),
@@ -3958,7 +6218,10 @@ Future<EmployerProfileResult?> showEmployerProfileDialog(
                   Expanded(
                     child: OutlinedButton.icon(
                       onPressed: () async {
-                        final file = await pickUploadFile('image', extensions: ['jpg', 'jpeg', 'png', 'webp']);
+                        final file = await pickUploadFile(
+                          'image',
+                          extensions: ['jpg', 'jpeg', 'png', 'webp'],
+                        );
                         if (file != null) setState(() => image = file);
                       },
                       icon: const Icon(Icons.image_outlined),
@@ -3971,14 +6234,22 @@ Future<EmployerProfileResult?> showEmployerProfileDialog(
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Hủy')),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Hủy'),
+          ),
           FilledButton(
             onPressed: () {
               Navigator.pop(
                 context,
-                EmployerProfileResult({
-                  for (final spec in specs) spec.key: controllers[spec.key]!.text.trim(),
-                }, logo, image),
+                EmployerProfileResult(
+                  {
+                    for (final spec in specs)
+                      spec.key: controllers[spec.key]!.text.trim(),
+                  },
+                  logo,
+                  image,
+                ),
               );
             },
             child: const Text('Lưu'),
@@ -3990,22 +6261,23 @@ Future<EmployerProfileResult?> showEmployerProfileDialog(
   for (final controller in controllers.values) {
     controller.dispose();
   }
+  mapUrl.dispose();
   return result;
 }
 
 Future<Map<String, dynamic>?> showJobFormDialog(
   BuildContext context, {
   Map<String, dynamic>? job,
+  required RecruitmentApi api,
   required List<Map<String, dynamic>> jtypes,
   required List<Map<String, dynamic>> jlevels,
   required List<Map<String, dynamic>> industries,
-  required List<Map<String, dynamic>> locations,
+  required List<Map<String, dynamic>> branches,
   required List<Map<String, dynamic>> skills,
   required List<Map<String, dynamic>> selectedSkills,
 }) async {
   final controllers = {
     'jname': TextEditingController(text: textOf(job?['jname'])),
-    'address': TextEditingController(text: textOf(job?['address'])),
     'amount': TextEditingController(text: textOf(job?['amount'])),
     'min_salary': TextEditingController(text: textOf(job?['min_salary'])),
     'max_salary': TextEditingController(text: textOf(job?['max_salary'])),
@@ -4013,32 +6285,88 @@ Future<Map<String, dynamic>?> showJobFormDialog(
     'gender': TextEditingController(text: textOf(job?['gender'])),
     'expire_at': TextEditingController(text: textOf(job?['expire_at'])),
     'description': TextEditingController(text: textOf(job?['description'])),
+    'requirements': TextEditingController(text: textOf(job?['requirements'])),
+    'benefits': TextEditingController(text: textOf(job?['benefits'])),
+    'education_level': TextEditingController(
+      text: textOf(job?['education_level']),
+    ),
+    'required_languages': TextEditingController(
+      text: textOf(job?['required_languages']),
+    ),
+    'required_certificates': TextEditingController(
+      text: textOf(job?['required_certificates']),
+    ),
+    'special_address': TextEditingController(
+      text: textOf(job?['special_address']),
+    ),
+    'map_lat': TextEditingController(text: textOf(job?['map_lat'])),
+    'map_lng': TextEditingController(text: textOf(job?['map_lng'])),
   };
-  var jtypeId = intValue(job?['jtype_id']) ?? intValue(jtypes.firstOrNull?['id']);
-  var jlevelId = intValue(job?['jlevel_id']) ?? intValue(jlevels.firstOrNull?['id']);
-  final industryIds = listFromResponse(job ?? {}, key: 'industries').map((e) => intValue(e['id'])).whereType<int>().toSet();
-  final locationIds = listFromResponse(job ?? {}, key: 'locations').map((e) => intValue(e['id'])).whereType<int>().toSet();
-  final skillIds = selectedSkills.map((e) => intValue(e['id'])).whereType<int>().toSet();
+  var jtypeId =
+      intValue(job?['jtype_id']) ?? intValue(jtypes.firstOrNull?['id']);
+  var jlevelId =
+      intValue(job?['jlevel_id']) ?? intValue(jlevels.firstOrNull?['id']);
+  var branchId =
+      intValue(job?['branch_id']) ??
+      intValue(asMap(job?['branch'])['id']) ??
+      intValue(branches.firstOrNull?['id']);
+  var workLocationType = textOf(job?['work_location_type'], 'onsite');
+  var status = textOf(
+    job?['status'],
+    boolValue(job?['is_active']) ? 'active' : 'active',
+  );
+  final industryIds = listFromResponse(
+    job ?? {},
+    key: 'industries',
+  ).map((e) => intValue(e['id'])).whereType<int>().toSet();
+  final requiredSkillIds = selectedSkills
+      .where(
+        (skill) =>
+            textOf(asMap(skill['pivot'])['requirement_type'], 'required') ==
+            'required',
+      )
+      .map((e) => intValue(e['id']))
+      .whereType<int>()
+      .toSet();
+  final preferredSkillIds = selectedSkills
+      .where(
+        (skill) =>
+            textOf(asMap(skill['pivot'])['requirement_type']) == 'preferred',
+      )
+      .map((e) => intValue(e['id']))
+      .whereType<int>()
+      .toSet();
+  final mapUrl = TextEditingController();
+  var resolving = false;
+
   final result = await showDialog<Map<String, dynamic>>(
     context: context,
     builder: (context) => StatefulBuilder(
       builder: (context, setState) => AlertDialog(
         title: Text(job == null ? 'Tạo tin tuyển dụng' : 'Sửa tin tuyển dụng'),
         content: SizedBox(
-          width: 640,
+          width: 680,
           child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                textField(controllers['jname']!, 'Tên việc làm'),
+                textField(controllers['jname']!, 'Chức danh / vị trí'),
                 const SizedBox(height: 10),
                 Row(
                   children: [
                     Expanded(
                       child: DropdownButtonFormField<int>(
                         initialValue: jtypeId,
-                        decoration: const InputDecoration(labelText: 'Hình thức'),
-                        items: [for (final item in jtypes) DropdownMenuItem(value: intValue(item['id']), child: Text(textOf(item['name'])))],
+                        decoration: const InputDecoration(
+                          labelText: 'Hình thức làm việc',
+                        ),
+                        items: [
+                          for (final item in jtypes)
+                            DropdownMenuItem(
+                              value: intValue(item['id']),
+                              child: Text(textOf(item['name'])),
+                            ),
+                        ],
                         onChanged: (value) => setState(() => jtypeId = value),
                       ),
                     ),
@@ -4047,40 +6375,263 @@ Future<Map<String, dynamic>?> showJobFormDialog(
                       child: DropdownButtonFormField<int>(
                         initialValue: jlevelId,
                         decoration: const InputDecoration(labelText: 'Cấp bậc'),
-                        items: [for (final item in jlevels) DropdownMenuItem(value: intValue(item['id']), child: Text(textOf(item['name'])))],
+                        items: [
+                          for (final item in jlevels)
+                            DropdownMenuItem(
+                              value: intValue(item['id']),
+                              child: Text(textOf(item['name'])),
+                            ),
+                        ],
                         onChanged: (value) => setState(() => jlevelId = value),
                       ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 10),
-                textField(controllers['address']!, 'Địa chỉ', maxLines: 2),
+                DropdownButtonFormField<int>(
+                  initialValue: branchId,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Chi nhánh phụ trách',
+                  ),
+                  items: [
+                    for (final item in branches)
+                      DropdownMenuItem(
+                        value: intValue(item['id']),
+                        child: Text(textOf(item['name'])),
+                      ),
+                  ],
+                  onChanged: (value) => setState(() => branchId = value),
+                ),
                 const SizedBox(height: 10),
                 Row(
                   children: [
-                    Expanded(child: textField(controllers['amount']!, 'Số lượng', keyboardType: TextInputType.number)),
+                    Expanded(
+                      child: DropdownButtonFormField<String>(
+                        initialValue: workLocationType,
+                        decoration: const InputDecoration(
+                          labelText: 'Địa điểm làm việc',
+                        ),
+                        items: const [
+                          DropdownMenuItem(
+                            value: 'onsite',
+                            child: Text('Tại chi nhánh'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'hybrid',
+                            child: Text('Hybrid'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'remote',
+                            child: Text('Remote'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'special',
+                            child: Text('Địa điểm khác'),
+                          ),
+                        ],
+                        onChanged: (value) => setState(
+                          () => workLocationType = value ?? 'onsite',
+                        ),
+                      ),
+                    ),
                     const SizedBox(width: 10),
-                    Expanded(child: textField(controllers['yoe']!, 'Năm kinh nghiệm', keyboardType: TextInputType.number)),
+                    Expanded(
+                      child: DropdownButtonFormField<String>(
+                        initialValue: status,
+                        decoration: const InputDecoration(
+                          labelText: 'Trạng thái',
+                        ),
+                        items: const [
+                          DropdownMenuItem(value: 'draft', child: Text('Nháp')),
+                          DropdownMenuItem(
+                            value: 'active',
+                            child: Text('Đang tuyển'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'paused',
+                            child: Text('Tạm dừng'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'closed',
+                            child: Text('Đã đóng'),
+                          ),
+                        ],
+                        onChanged: (value) =>
+                            setState(() => status = value ?? 'active'),
+                      ),
+                    ),
+                  ],
+                ),
+                if (workLocationType == 'special') ...[
+                  const SizedBox(height: 10),
+                  textField(
+                    controllers['special_address']!,
+                    'Địa điểm đặc biệt',
+                    maxLines: 2,
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: mapUrl,
+                    decoration: InputDecoration(
+                      labelText: 'Link Google Maps',
+                      suffixIcon: IconButton(
+                        tooltip: 'Lấy tọa độ',
+                        onPressed: resolving
+                            ? null
+                            : () async {
+                                if (mapUrl.text.trim().isEmpty) return;
+                                setState(() => resolving = true);
+                                try {
+                                  final resolved = await api
+                                      .resolveEmployerMapLink(
+                                        mapUrl.text.trim(),
+                                      );
+                                  controllers['map_lat']!.text = textOf(
+                                    resolved['lat'],
+                                  );
+                                  controllers['map_lng']!.text = textOf(
+                                    resolved['lng'],
+                                  );
+                                  showSnack(
+                                    context,
+                                    'Đã lấy tọa độ từ Google Maps.',
+                                  );
+                                } catch (error) {
+                                  showSnack(
+                                    context,
+                                    error.toString(),
+                                    isError: true,
+                                  );
+                                } finally {
+                                  setState(() => resolving = false);
+                                }
+                              },
+                        icon: resolving
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.my_location_outlined),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Wrap(
+                      spacing: 8,
+                      children: [
+                        Chip(
+                          label: Text(
+                            'Vĩ độ: ${textOf(controllers['map_lat']!.text, 'chưa có')}',
+                          ),
+                        ),
+                        Chip(
+                          label: Text(
+                            'Kinh độ: ${textOf(controllers['map_lng']!.text, 'chưa có')}',
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: textField(
+                        controllers['amount']!,
+                        'Số lượng',
+                        keyboardType: TextInputType.number,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: textField(
+                        controllers['yoe']!,
+                        'Năm kinh nghiệm',
+                        keyboardType: TextInputType.number,
+                      ),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 10),
                 Row(
                   children: [
-                    Expanded(child: textField(controllers['min_salary']!, 'Lương từ', keyboardType: TextInputType.number)),
+                    Expanded(
+                      child: textField(
+                        controllers['min_salary']!,
+                        'Lương từ',
+                        keyboardType: TextInputType.number,
+                      ),
+                    ),
                     const SizedBox(width: 10),
-                    Expanded(child: textField(controllers['max_salary']!, 'Đến', keyboardType: TextInputType.number)),
+                    Expanded(
+                      child: textField(
+                        controllers['max_salary']!,
+                        'Đến',
+                        keyboardType: TextInputType.number,
+                      ),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 10),
                 Row(
                   children: [
-                    Expanded(child: textField(controllers['gender']!, 'Giới tính 1 nam, 0 nữ', keyboardType: TextInputType.number)),
+                    Expanded(
+                      child: textField(
+                        controllers['gender']!,
+                        'Giới tính 0 nữ, 1 nam, 2 không yêu cầu',
+                        keyboardType: TextInputType.number,
+                      ),
+                    ),
                     const SizedBox(width: 10),
-                    Expanded(child: textField(controllers['expire_at']!, 'Hạn nộp YYYY-MM-DD')),
+                    Expanded(
+                      child: textField(
+                        controllers['expire_at']!,
+                        'Hạn nộp YYYY-MM-DD',
+                      ),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 10),
-                textField(controllers['description']!, 'Mô tả công việc', maxLines: 5),
+                textField(controllers['education_level']!, 'Học vấn yêu cầu'),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: textField(
+                        controllers['required_languages']!,
+                        'Ngôn ngữ',
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: textField(
+                        controllers['required_certificates']!,
+                        'Chứng chỉ',
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                textField(
+                  controllers['description']!,
+                  'Mô tả công việc',
+                  maxLines: 4,
+                ),
+                const SizedBox(height: 10),
+                textField(
+                  controllers['requirements']!,
+                  'Yêu cầu ứng viên',
+                  maxLines: 4,
+                ),
+                const SizedBox(height: 10),
+                textField(controllers['benefits']!, 'Quyền lợi', maxLines: 4),
                 const SizedBox(height: 12),
                 MultiChoiceBlock(
                   title: 'Ngành nghề',
@@ -4093,21 +6644,21 @@ Future<Map<String, dynamic>?> showJobFormDialog(
                   }),
                 ),
                 MultiChoiceBlock(
-                  title: 'Địa điểm',
-                  items: locations,
-                  selectedIds: locationIds,
+                  title: 'Kỹ năng bắt buộc',
+                  items: skills,
+                  selectedIds: requiredSkillIds,
                   onChanged: (ids) => setState(() {
-                    locationIds
+                    requiredSkillIds
                       ..clear()
                       ..addAll(ids);
                   }),
                 ),
                 MultiChoiceBlock(
-                  title: 'Kỹ năng',
+                  title: 'Kỹ năng ưu tiên',
                   items: skills,
-                  selectedIds: skillIds,
+                  selectedIds: preferredSkillIds,
                   onChanged: (ids) => setState(() {
-                    skillIds
+                    preferredSkillIds
                       ..clear()
                       ..addAll(ids);
                   }),
@@ -4117,24 +6668,40 @@ Future<Map<String, dynamic>?> showJobFormDialog(
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Hủy')),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Hủy'),
+          ),
           FilledButton(
             onPressed: () {
               Navigator.pop(context, {
                 'jname': controllers['jname']!.text.trim(),
+                'branch_id': branchId,
                 'jtype_id': jtypeId,
                 'jlevel_id': jlevelId,
-                'address': controllers['address']!.text.trim(),
+                'work_location_type': workLocationType,
+                'special_address': controllers['special_address']!.text.trim(),
+                'map_lat': controllers['map_lat']!.text.trim(),
+                'map_lng': controllers['map_lng']!.text.trim(),
                 'amount': int.tryParse(controllers['amount']!.text.trim()),
                 'min_salary': nullableInt(controllers['min_salary']!.text),
                 'max_salary': nullableInt(controllers['max_salary']!.text),
                 'yoe': nullableInt(controllers['yoe']!.text),
                 'gender': nullableInt(controllers['gender']!.text),
+                'education_level': controllers['education_level']!.text.trim(),
+                'required_languages': controllers['required_languages']!.text
+                    .trim(),
+                'required_certificates': controllers['required_certificates']!
+                    .text
+                    .trim(),
                 'expire_at': controllers['expire_at']!.text.trim(),
                 'description': controllers['description']!.text.trim(),
+                'requirements': controllers['requirements']!.text.trim(),
+                'benefits': controllers['benefits']!.text.trim(),
+                'status': status,
                 'industries': industryIds.toList(),
-                'locations': locationIds.toList(),
-                'skills': skillIds.toList(),
+                'required_skills': requiredSkillIds.toList(),
+                'preferred_skills': preferredSkillIds.toList(),
               });
             },
             child: const Text('Lưu'),
@@ -4146,6 +6713,7 @@ Future<Map<String, dynamic>?> showJobFormDialog(
   for (final controller in controllers.values) {
     controller.dispose();
   }
+  mapUrl.dispose();
   return result;
 }
 
@@ -4206,7 +6774,9 @@ Future<Map<String, dynamic>?> showApplicationMessageDialog(
   String status,
 ) async {
   final title = TextEditingController(
-    text: actType == 'ACCEPT' ? 'Thông báo hồ sơ phù hợp' : 'Thông báo kết quả ứng tuyển',
+    text: actType == 'ACCEPT'
+        ? 'Thông báo hồ sơ phù hợp'
+        : 'Thông báo kết quả ứng tuyển',
   );
   final content = TextEditingController();
   var sendMail = false;
@@ -4218,11 +6788,20 @@ Future<Map<String, dynamic>?> showApplicationMessageDialog(
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('Ứng viên: ${fullName(candidate)}\nVị trí: ${textOf(candidate['jname'])}'),
+            Text(
+              'Ứng viên: ${fullName(candidate)}\nVị trí: ${textOf(candidate['jname'])}',
+            ),
             const SizedBox(height: 10),
-            TextField(controller: title, decoration: const InputDecoration(labelText: 'Tiêu đề')),
+            TextField(
+              controller: title,
+              decoration: const InputDecoration(labelText: 'Tiêu đề'),
+            ),
             const SizedBox(height: 10),
-            TextField(controller: content, maxLines: 6, decoration: const InputDecoration(labelText: 'Nội dung')),
+            TextField(
+              controller: content,
+              maxLines: 6,
+              decoration: const InputDecoration(labelText: 'Nội dung'),
+            ),
             CheckboxListTile(
               value: sendMail,
               onChanged: (value) => setState(() => sendMail = value ?? false),
@@ -4231,7 +6810,10 @@ Future<Map<String, dynamic>?> showApplicationMessageDialog(
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Hủy')),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Hủy'),
+          ),
           FilledButton(
             onPressed: () => Navigator.pop(context, {
               'title': title.text.trim(),
@@ -4256,10 +6838,16 @@ Future<Map<String, dynamic>?> showContactCandidateDialog(
   int jobId,
   List<Map<String, dynamic>> jobs,
 ) async {
-  final job = jobs.firstWhere((item) => intValue(item['id']) == jobId, orElse: () => {'id': jobId, 'jname': ''});
-  final title = TextEditingController(text: 'Mời ứng tuyển vị trí ${textOf(job['jname'])}'.trim());
+  final job = jobs.firstWhere(
+    (item) => intValue(item['id']) == jobId,
+    orElse: () => {'id': jobId, 'jname': ''},
+  );
+  final title = TextEditingController(
+    text: 'Mời ứng tuyển vị trí ${textOf(job['jname'])}'.trim(),
+  );
   final content = TextEditingController(
-    text: 'Xin chào ${fullName(candidate)},\n\nChúng tôi thấy hồ sơ của bạn phù hợp với vị trí ${textOf(job['jname'], 'đang tuyển')} và muốn trao đổi thêm về cơ hội này.\n\nTrân trọng,',
+    text:
+        'Xin chào ${fullName(candidate)},\n\nChúng tôi thấy hồ sơ của bạn phù hợp với vị trí ${textOf(job['jname'], 'đang tuyển')} và muốn trao đổi thêm về cơ hội này.\n\nTrân trọng,',
   );
   var sendMail = true;
   final result = await showDialog<Map<String, dynamic>>(
@@ -4272,9 +6860,16 @@ Future<Map<String, dynamic>?> showContactCandidateDialog(
           children: [
             Text('${fullName(candidate)}\n${textOf(candidate['email'])}'),
             const SizedBox(height: 10),
-            TextField(controller: title, decoration: const InputDecoration(labelText: 'Tiêu đề')),
+            TextField(
+              controller: title,
+              decoration: const InputDecoration(labelText: 'Tiêu đề'),
+            ),
             const SizedBox(height: 10),
-            TextField(controller: content, maxLines: 7, decoration: const InputDecoration(labelText: 'Nội dung')),
+            TextField(
+              controller: content,
+              maxLines: 7,
+              decoration: const InputDecoration(labelText: 'Nội dung'),
+            ),
             CheckboxListTile(
               value: sendMail,
               onChanged: (value) => setState(() => sendMail = value ?? true),
@@ -4283,7 +6878,10 @@ Future<Map<String, dynamic>?> showContactCandidateDialog(
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Hủy')),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Hủy'),
+          ),
           FilledButton(
             onPressed: () => Navigator.pop(context, {
               'candidate_id': candidate['id'],
@@ -4314,10 +6912,19 @@ Future<String?> showTextInputDialog(
     context: context,
     builder: (context) => AlertDialog(
       title: Text(title),
-      content: TextField(controller: controller, decoration: InputDecoration(labelText: label)),
+      content: TextField(
+        controller: controller,
+        decoration: InputDecoration(labelText: label),
+      ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Hủy')),
-        FilledButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('Lưu')),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Hủy'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, controller.text),
+          child: const Text('Lưu'),
+        ),
       ],
     ),
   );
@@ -4332,8 +6939,14 @@ Future<bool> confirmDialog(BuildContext context, String message) async {
           title: const Text('Xác nhận'),
           content: Text(message),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Hủy')),
-            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Đồng ý')),
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Hủy'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Đồng ý'),
+            ),
           ],
         ),
       ) ??
@@ -4352,7 +6965,12 @@ void showResumeSheet(BuildContext context, Map<String, dynamic> detail) {
         controller: controller,
         padding: const EdgeInsets.all(18),
         children: [
-          Text(textOf(basic['title'], 'CV'), style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900)),
+          Text(
+            textOf(basic['title'], 'CV'),
+            style: Theme.of(
+              context,
+            ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900),
+          ),
           Text(textOf(basic['fullname'])),
           const SizedBox(height: 12),
           Text(textOf(basic['objective'])),
@@ -4386,7 +7004,10 @@ DropdownButtonFormField<String> _simpleDropdown({
     items: [
       const DropdownMenuItem<String>(value: null, child: Text('Tất cả')),
       for (final item in items)
-        DropdownMenuItem(value: textOf(item['id']), child: Text(textOf(item['name']))),
+        DropdownMenuItem(
+          value: textOf(item['id']),
+          child: Text(textOf(item['name'])),
+        ),
     ],
     onChanged: onChanged,
   );
@@ -4415,14 +7036,21 @@ String? requiredValidator(String? value) {
   return null;
 }
 
-Future<UploadFile?> pickUploadFile(String field, {List<String>? extensions}) async {
+Future<UploadFile?> pickUploadFile(
+  String field, {
+  List<String>? extensions,
+}) async {
   final result = await FilePicker.platform.pickFiles(
     allowMultiple: false,
     withData: true,
     type: extensions == null ? FileType.any : FileType.custom,
     allowedExtensions: extensions,
   );
-  if (result == null || result.files.isEmpty || result.files.first.bytes == null) return null;
+  if (result == null ||
+      result.files.isEmpty ||
+      result.files.first.bytes == null) {
+    return null;
+  }
   final file = result.files.first;
   return UploadFile(field: field, name: file.name, bytes: file.bytes!);
 }
@@ -4490,8 +7118,20 @@ bool boolValue(dynamic value) {
   return text == 'true' || text == '1' || text == 'yes';
 }
 
+Map<String, dynamic> candidateFromMatch(Map<String, dynamic> item) {
+  final candidate = asMap(item['candidate']);
+  return candidate.isEmpty ? item : candidate;
+}
+
+List<String> matchReasons(Map<String, dynamic> item) => listFromAny(
+  item['reasons'],
+).map((value) => textOf(value)).where((value) => value.isNotEmpty).toList();
+
 String fullName(Map<String, dynamic> data) {
-  final name = [textOf(data['lastname']), textOf(data['firstname'])].where((part) => part.isNotEmpty).join(' ');
+  final name = [
+    textOf(data['lastname']),
+    textOf(data['firstname']),
+  ].where((part) => part.isNotEmpty).join(' ');
   if (name.isNotEmpty) return name;
   return textOf(data['name'], 'Ứng viên');
 }
@@ -4514,9 +7154,34 @@ String employeeRange(Map<String, dynamic> employer) {
   return 'Đến $max';
 }
 
+String memberRoleText(String role) {
+  return switch (role) {
+    'company_owner' => 'Tổng công ty',
+    'branch_manager' => 'Quản lý chi nhánh',
+    'branch_hr' => 'HR chi nhánh',
+    _ => role,
+  };
+}
+
+String moneyText(dynamic value) {
+  final amount = intValue(value);
+  if (amount == null) return '0 đ';
+  final raw = amount.toString();
+  final buffer = StringBuffer();
+  for (var i = 0; i < raw.length; i++) {
+    final fromEnd = raw.length - i;
+    buffer.write(raw[i]);
+    if (fromEnd > 1 && fromEnd % 3 == 1) buffer.write('.');
+  }
+  return '${buffer.toString()} đ';
+}
+
 String profileSectionLabel(String key) {
   return profileSections
-      .firstWhere((section) => section.key == key, orElse: () => ProfileSection(key, key, const [], Icons.circle))
+      .firstWhere(
+        (section) => section.key == key,
+        orElse: () => ProfileSection(key, key, const [], Icons.circle),
+      )
       .label;
 }
 

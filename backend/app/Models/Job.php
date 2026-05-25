@@ -15,6 +15,14 @@ class Job extends Model
     {
         return $this->belongsTo(Employer::class);
     }
+    public function branch()
+    {
+        return $this->belongsTo(CompanyBranch::class, 'branch_id');
+    }
+    public function postedBy()
+    {
+        return $this->belongsTo(User::class, 'posted_by_user_id');
+    }
     public function locations()
     {
         return $this->belongsToMany(Location::class);
@@ -25,7 +33,18 @@ class Job extends Model
     }
     public function skills()
     {
-        return $this->belongsToMany(Jskill::class, 'job_skill', 'job_id', 'skill_id');
+        return $this->belongsToMany(Jskill::class, 'job_skill', 'job_id', 'skill_id')
+            ->withPivot('requirement_type');
+    }
+    public function requiredSkills()
+    {
+        return $this->belongsToMany(Jskill::class, 'job_skill', 'job_id', 'skill_id')
+            ->wherePivot('requirement_type', 'required');
+    }
+    public function preferredSkills()
+    {
+        return $this->belongsToMany(Jskill::class, 'job_skill', 'job_id', 'skill_id')
+            ->wherePivot('requirement_type', 'preferred');
     }
     public function jtype()
     {

@@ -20,6 +20,8 @@ function CandidateList() {
   const [showDialog, setShowDialog] = useState(false);
 
   const isAuth = useSelector((state) => state.employerAuth.isAuth);
+  const permissions = useSelector((state) => state.employerAuth.current.permissions || {});
+  const canManageApplications = Boolean(permissions.manage_applications);
 
   const makeTabStyle = (tabName) =>
     clsx(
@@ -31,13 +33,13 @@ function CandidateList() {
 
   const getCandidateList = async () => {
     const res = await employerApi.getCandidateList(keyword, status);
-    setCandidates(res);
+    setCandidates(Array.isArray(res) ? res : res?.data || []);
   };
 
   useEffect(() => {
-    getCandidateList();
+    if (isAuth) getCandidateList();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [keyword, status]);
+  }, [keyword, status, isAuth]);
 
   useEffect(() => {
     if (step === "step1") setStatus("WAITING");
@@ -46,6 +48,8 @@ function CandidateList() {
   }, [step]);
 
   const handleClickActionBtn = async (candidate, actType) => {
+    if (!canManageApplications) return;
+
     if (actType === "VIEWED" && candidate.status === "WAITING") {
       await employerApi.processApplying({ ...candidate, actType });
     }
@@ -146,7 +150,8 @@ function CandidateList() {
                     <td>{item.phone}</td>
                     <td>{item.email}</td>
                     <td style={{ fontSize: "17px" }}>
-                      {status !== "PASSED" &&
+                      {canManageApplications &&
+                      status !== "PASSED" &&
                       status !== "RESUME_FAILED" &&
                       status !== "INTERVIEW_FAILED" ? (
                         <>
@@ -174,7 +179,7 @@ function CandidateList() {
                         <BsEye
                           type="button"
                           className="text-primary"
-                          onClick={() => handleClickActionBtn(item, "VIEWED")}
+                          onClick={() => canManageApplications && handleClickActionBtn(item, "VIEWED")}
                         />
                       </a>
                     </td>

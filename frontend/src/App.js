@@ -21,6 +21,9 @@ const CandidateList = lazy(() => import("./view/employer/candidates/CandidateLis
 const CandidateSearch = lazy(() => import("./view/employer/candidates/CandidateSearch"));
 const JobManagement = lazy(() => import("./view/employer/jobs/JobManagement"));
 const EmployerDashboard = lazy(() => import("./view/employer/dashboard/Dashboard"));
+const EmployerBilling = lazy(() => import("./view/employer/billing/Billing"));
+const EmployerBranches = lazy(() => import("./view/employer/company/BranchManagement"));
+const EmployerMembers = lazy(() => import("./view/employer/company/MemberManagement"));
 const CandidateLayout = lazy(() => import("./view/candidate/management/layouts/CandidateLayout"));
 const CandidateDashboard = lazy(() => import("./view/candidate/management/Dashboard"));
 const AppliedJobs = lazy(() => import("./view/candidate/management/AppliedJobs"));
@@ -103,6 +106,9 @@ function App() {
                     <Route path="candidates" element={<CandidateList />} />
                     <Route path="candidate-search" element={<CandidateSearch />} />
                     <Route path="jobs" element={<JobManagement />} />
+                    <Route path="branches" element={<EmployerBranches />} />
+                    <Route path="members" element={<EmployerMembers />} />
+                    <Route path="billing" element={<EmployerBilling />} />
                   </Routes>
                 </EmployerLayout>
               }

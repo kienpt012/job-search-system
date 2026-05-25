@@ -1,5 +1,6 @@
 import "./dashboard.css";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
 import { toast } from "react-toastify";
 import {
@@ -9,6 +10,7 @@ import {
   BsBuildings,
   BsCameraFill,
   BsCardImage,
+  BsChevronUp,
   BsCheckCircleFill,
   BsFillBriefcaseFill,
   BsFillGeoAltFill,
@@ -147,7 +149,10 @@ const handleAmbientPointerMove = (event) => {
 
 export default function EmployerDashboard() {
   const dispatch = useDispatch();
-  const company = useSelector((state) => state.employerAuth.current.employer);
+  const nav = useNavigate();
+  const employerAuth = useSelector((state) => state.employerAuth.current || {});
+  const company = employerAuth.employer;
+  const authPermissions = employerAuth.permissions || {};
 
   const [dashboard, setDashboard] = useState({
     employer: null,
@@ -164,6 +169,19 @@ export default function EmployerDashboard() {
     monthly_applications: [],
     application_status: [],
     job_performance: [],
+    branches: [],
+    branch: null,
+    branch_summaries: [],
+    branch_stats: {
+      total: 0,
+      active: 0,
+      with_jobs: 0,
+      without_location: 0,
+      total_members: 0,
+    },
+    workspace_location: null,
+    profile_scope: "",
+    permissions: {},
   });
   const [companyForm, setCompanyForm] = useState(initialFormState);
   const [logoFile, setLogoFile] = useState(null);
@@ -178,12 +196,43 @@ export default function EmployerDashboard() {
   const [isResolvingSharedMapUrl, setIsResolvingSharedMapUrl] = useState(false);
   const [isLocatingCurrentPosition, setIsLocatingCurrentPosition] = useState(false);
   const [isResolvingAddress, setIsResolvingAddress] = useState(false);
+  const [isProfileEditorOpen, setIsProfileEditorOpen] = useState(false);
   const [mapError, setMapError] = useState("");
   const mapNodeRef = useRef(null);
   const mapRef = useRef(null);
   const markerRef = useRef(null);
+  const canEditScopeRef = useRef(false);
 
-  const employer = dashboard.employer || company || {};
+  const companyProfile = dashboard.employer || company || {};
+  const hasDashboardPermissions = Object.keys(dashboard.permissions || {}).length > 0;
+  const dashboardPermissions = hasDashboardPermissions ? dashboard.permissions : authPermissions || {};
+  const authMember = employerAuth.member || employerAuth.company_member || {};
+  const authBranch =
+    employerAuth.branch ||
+    authMember.branch ||
+    (authMember.branch_id
+      ? (employerAuth.branches || []).find((branch) => String(branch.id) === String(authMember.branch_id))
+      : null);
+  const effectiveProfileScope =
+    dashboard.profile_scope || (authMember.role && authMember.role !== "company_owner" ? "branch" : "company");
+  const isBranchScope = effectiveProfileScope === "branch";
+  const scopedProfile = isBranchScope
+    ? dashboard.workspace_location || dashboard.branch || dashboard.branches?.[0] || authBranch || {}
+    : dashboard.workspace_location || companyProfile || {};
+  const employer = scopedProfile?.id ? scopedProfile : companyProfile || {};
+  const scopeLabel = isBranchScope ? "chi nhánh" : "công ty";
+  const canEditScope = Boolean(
+    isBranchScope
+      ? dashboardPermissions.update_own_branch || dashboardPermissions.update_branches
+      : dashboardPermissions.manage_company_profile
+  );
+  const branchSummaries = dashboard.branch_summaries || [];
+  const branchStats = dashboard.branch_stats || {};
+  const topBranchSummaries = branchSummaries.slice(0, 4);
+
+  useEffect(() => {
+    canEditScopeRef.current = canEditScope;
+  }, [canEditScope]);
 
   const syncMarker = (lat, lng) => {
     if (!mapRef.current || !window.L || !hasMapLocation({ map_lat: lat, map_lng: lng })) {
@@ -219,6 +268,10 @@ export default function EmployerDashboard() {
   };
 
   const handleMapSelection = async (lat, lng) => {
+    if (!canEditScopeRef.current) {
+      return;
+    }
+
     try {
       setMapError("");
       setIsResolvingAddress(true);
@@ -271,7 +324,11 @@ export default function EmployerDashboard() {
   const getDashboard = async () => {
     const res = await employerApi.getDashboard();
     setDashboard(res);
-    hydrateForm(res.employer);
+    const profile =
+      res.profile_scope === "branch"
+        ? res.workspace_location || res.branch || res.branches?.[0]
+        : res.workspace_location || res.employer;
+    hydrateForm(profile);
   };
 
   const refreshAuthEmployer = async () => {
@@ -297,6 +354,10 @@ export default function EmployerDashboard() {
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
+    if (!isProfileEditorOpen) {
+      return undefined;
+    }
+
     let isMounted = true;
 
     const bootMap = async () => {
@@ -345,7 +406,7 @@ export default function EmployerDashboard() {
       markerRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isProfileEditorOpen]);
 
   useEffect(() => {
     if (hasMapLocation({ map_lat: companyForm.map_lat, map_lng: companyForm.map_lng })) {
@@ -364,6 +425,11 @@ export default function EmployerDashboard() {
     const values = dashboard.job_performance.map((item) => item.total_applications);
     return Math.max(...values, 1);
   }, [dashboard.job_performance]);
+
+  const openProfileEditor = () => {
+    setIsProfileEditorOpen(true);
+    window.setTimeout(() => scrollToSection("company-info-section"), 60);
+  };
 
   const summaryCards = [
     {
@@ -388,9 +454,9 @@ export default function EmployerDashboard() {
       tone: "amber",
     },
     {
-      title: "Tỷ lệ phản hồi",
-      value:
-        dashboard.stats.total_applications > 0
+      title: isBranchScope ? "Tỷ lệ phản hồi" : "Chi nhánh",
+      value: isBranchScope
+        ? dashboard.stats.total_applications > 0
           ? `${Math.round(
               ((dashboard.stats.interviewing_applications +
                 dashboard.stats.passed_applications +
@@ -398,9 +464,12 @@ export default function EmployerDashboard() {
                 dashboard.stats.total_applications) *
                 100
             )}%`
-          : "0%",
-      hint: "Tính trên toàn bộ hồ sơ đã nhận",
-      icon: <BsBarChartLineFill />,
+          : "0%"
+        : `${branchStats.active || 0}/${branchStats.total || 0}`,
+      hint: isBranchScope
+        ? "Tính trên toàn bộ hồ sơ đã nhận"
+        : `${branchStats.with_jobs || 0} chi nhánh đang có tin tuyển dụng`,
+      icon: isBranchScope ? <BsBarChartLineFill /> : <BsBuildings />,
       tone: "slate",
     },
   ];
@@ -413,7 +482,11 @@ export default function EmployerDashboard() {
   const sendUpdateRequest = async (section, formData, successMessage) => {
     try {
       setSavingSection(section);
-      await employerApi.updateCurrent(formData);
+      if (section === "info" && isBranchScope) {
+        await employerApi.updateBranch(employer.id, formData);
+      } else {
+        await employerApi.updateCurrent(formData);
+      }
       await Promise.all([getDashboard(), refreshAuthEmployer()]);
       toast.success(successMessage);
     } catch (error) {
@@ -424,6 +497,27 @@ export default function EmployerDashboard() {
   };
 
   const handleSaveCompanyInfo = async () => {
+    if (!canEditScope) {
+      toast.error("Bạn không có quyền cập nhật thông tin này.");
+      return;
+    }
+
+    if (isBranchScope) {
+      await sendUpdateRequest(
+        "info",
+        {
+          name: companyForm.name,
+          contact_name: companyForm.contact_name,
+          phone: companyForm.phone,
+          address: companyForm.address,
+          map_lat: companyForm.map_lat === "" ? null : companyForm.map_lat,
+          map_lng: companyForm.map_lng === "" ? null : companyForm.map_lng,
+        },
+        "Đã cập nhật thông tin chi nhánh."
+      );
+      return;
+    }
+
     const formData = new FormData();
     Object.entries(companyForm).forEach(([key, value]) => {
       formData.append(key, value);
@@ -432,6 +526,11 @@ export default function EmployerDashboard() {
   };
 
   const handleSaveLogo = async () => {
+    if (isBranchScope) {
+      toast.info("Logo được quản lý ở hồ sơ tổng công ty.");
+      return;
+    }
+
     if (!logoFile) {
       toast.info("Chọn logo trước khi cập nhật.");
       return;
@@ -443,6 +542,11 @@ export default function EmployerDashboard() {
   };
 
   const handleSaveCover = async () => {
+    if (isBranchScope) {
+      toast.info("Ảnh nền được quản lý ở hồ sơ tổng công ty.");
+      return;
+    }
+
     if (!coverFile) {
       toast.info("Chọn ảnh nền trước khi cập nhật.");
       return;
@@ -478,6 +582,10 @@ export default function EmployerDashboard() {
   };
 
   const handleSearchMap = async () => {
+    if (!canEditScope) {
+      return;
+    }
+
     if (!mapSearchQuery.trim()) {
       setMapSearchResults([]);
       return;
@@ -496,6 +604,10 @@ export default function EmployerDashboard() {
   };
 
   const handleSelectMapResult = (result) => {
+    if (!canEditScope) {
+      return;
+    }
+
     const lat = Number(result.lat);
     const lng = Number(result.lon);
     setMapSearchResults([]);
@@ -505,6 +617,10 @@ export default function EmployerDashboard() {
   };
 
   const handleClearMapLocation = () => {
+    if (!canEditScope) {
+      return;
+    }
+
     setMapSearchQuery("");
     setSharedMapUrl("");
     setMapSearchResults([]);
@@ -514,6 +630,10 @@ export default function EmployerDashboard() {
   };
 
   const handleResolveSharedMapUrl = async () => {
+    if (!canEditScope) {
+      return;
+    }
+
     if (!sharedMapUrl.trim()) {
       setMapError("Hãy nhập liên kết chia sẻ Google Maps.");
       return;
@@ -542,6 +662,10 @@ export default function EmployerDashboard() {
   };
 
   const handleUseCurrentLocation = async () => {
+    if (!canEditScope) {
+      return;
+    }
+
     if (!navigator.geolocation) {
       setMapError("Trình duyệt hiện tại không hỗ trợ GPS.");
       return;
@@ -582,70 +706,136 @@ export default function EmployerDashboard() {
 
   return (
     <div className="employer-dashboard">
-      <section className="employer-dashboard__hero" onMouseMove={handleAmbientPointerMove}>
+      <section
+        className={`employer-dashboard__hero ${!isBranchScope ? "employer-dashboard__hero--company" : ""}`}
+        onMouseMove={handleAmbientPointerMove}
+      >
         <div className="employer-dashboard__hero-content">
-          <div className="dashboard-kicker">Employer control room</div>
+          <div className="dashboard-kicker">
+            {isBranchScope ? "Employer control room" : "Company command center"}
+          </div>
           <h1>{employer?.name || "Dashboard nhà tuyển dụng"}</h1>
           <p>
-            Theo dõi hiệu suất tuyển dụng, cập nhật hồ sơ công ty và quản lý vị trí
-            doanh nghiệp bằng ghim bản đồ thay cho nhập địa chỉ thủ công.
+            {isBranchScope
+              ? "Theo dõi hiệu suất tuyển dụng và vị trí chi nhánh trong phạm vi được phân quyền."
+              : "Quản lý toàn bộ chi nhánh, tin tuyển dụng, hồ sơ ứng tuyển và quyền truy cập HR trong một màn hình gọn."}
           </p>
           <div className="dashboard-quick-actions">
-            <button type="button" onClick={() => scrollToSection("company-info-section")}>
-              <BsPencilSquare /> Chỉnh thông tin công ty
+            {!isBranchScope && (
+              <button type="button" onClick={() => nav("/employer/branches")}>
+                <BsBuildings /> Quản lý chi nhánh
+              </button>
+            )}
+            <button type="button" onClick={() => nav("/employer/jobs")}>
+              <BsFillBriefcaseFill /> Việc làm
             </button>
-            <button type="button" onClick={() => scrollToSection("company-logo-section")}>
-              <BsCameraFill /> Chỉnh logo
+            <button type="button" onClick={openProfileEditor}>
+              <BsPencilSquare /> Chỉnh hồ sơ {scopeLabel}
             </button>
-            <button type="button" onClick={() => scrollToSection("company-cover-section")}>
-              <BsCardImage /> Chỉnh ảnh nền
-            </button>
+            {!isBranchScope && isProfileEditorOpen && (
+              <>
+                <button type="button" onClick={() => scrollToSection("company-logo-section")}>
+                  <BsCameraFill /> Chỉnh logo
+                </button>
+                <button type="button" onClick={() => scrollToSection("company-cover-section")}>
+                  <BsCardImage /> Chỉnh ảnh nền
+                </button>
+              </>
+            )}
           </div>
         </div>
 
-        <div className="dashboard-hero__profile">
-          <div className="dashboard-hero__cover">
-            <AppImage
-              src={coverPreview || employer?.image}
-              fallbackVariant="cover"
-              alt={employer?.name || "Company cover"}
-            />
+        {!isBranchScope ? (
+          <div className="dashboard-branch-overview">
+            <div className="dashboard-branch-overview__head">
+              <div>
+                <span>Tổng quan chi nhánh</span>
+                <strong>{branchStats.total || 0} chi nhánh</strong>
+              </div>
+              <button type="button" onClick={() => nav("/employer/branches")}>
+                <BsBuildings />
+                Mở quản lý
+              </button>
+            </div>
+
+            <div className="dashboard-branch-overview__stats">
+              <div>
+                <strong>{branchStats.active || 0}</strong>
+                <span>Đang hoạt động</span>
+              </div>
+              <div>
+                <strong>{branchStats.with_jobs || 0}</strong>
+                <span>Có tin tuyển dụng</span>
+              </div>
+              <div>
+                <strong>{branchStats.total_members || 0}</strong>
+                <span>Nhân sự HR</span>
+              </div>
+            </div>
+
+            <div className="dashboard-branch-overview__list">
+              {topBranchSummaries.map((branch) => (
+                <div key={branch.id} className="dashboard-branch-overview__item">
+                  <div>
+                    <strong>{branch.name}</strong>
+                    <span>{branch.is_headquarters ? "Trụ sở chính" : branch.address || "Chưa cập nhật địa chỉ"}</span>
+                  </div>
+                  <div>
+                    <b>{branch.active_jobs}/{branch.total_jobs}</b>
+                    <small>tin mở</small>
+                  </div>
+                </div>
+              ))}
+              {topBranchSummaries.length === 0 && (
+                <div className="dashboard-empty">Chưa có chi nhánh để hiển thị.</div>
+              )}
+            </div>
           </div>
-          <div className="dashboard-hero__metrics" aria-label="Recruitment summary">
-            <div>
-              <span>{dashboard.stats.total_jobs}</span>
-              <small>Tin tuyển dụng</small>
-            </div>
-            <div>
-              <span>{dashboard.stats.total_applications}</span>
-              <small>Lượt ứng tuyển</small>
-            </div>
-            <div>
-              <span>{dashboard.stats.passed_applications}</span>
-              <small>Ứng viên đạt</small>
-            </div>
-          </div>
-          <div className="dashboard-hero__company">
-            <div className="dashboard-hero__logo">
+        ) : (
+          <div className="dashboard-hero__profile">
+            <div className="dashboard-hero__cover">
               <AppImage
-                src={logoPreview || employer?.logo}
-                fallbackVariant="logo"
-                alt={employer?.name || "Company logo"}
+                src={coverPreview || companyProfile?.image}
+                fallbackVariant="cover"
+                alt={employer?.name || "Company cover"}
               />
             </div>
-            <div>
-              <div className="dashboard-hero__name">{employer?.name || "Company"}</div>
-              <div className="dashboard-hero__meta">
-                <BsBuildings />
-                <span>{employer?.address || "Chưa cập nhật vị trí"}</span>
+            <div className="dashboard-hero__metrics" aria-label="Recruitment summary">
+              <div>
+                <span>{dashboard.stats.total_jobs}</span>
+                <small>Tin tuyển dụng</small>
               </div>
-              <div className="dashboard-hero__meta">
-                <BsArrowUpRight />
-                <span>{employer?.website || "Chưa cập nhật website"}</span>
+              <div>
+                <span>{dashboard.stats.total_applications}</span>
+                <small>Lượt ứng tuyển</small>
+              </div>
+              <div>
+                <span>{dashboard.stats.passed_applications}</span>
+                <small>Ứng viên đạt</small>
+              </div>
+            </div>
+            <div className="dashboard-hero__company">
+              <div className="dashboard-hero__logo">
+                <AppImage
+                  src={logoPreview || companyProfile?.logo}
+                  fallbackVariant="logo"
+                  alt={employer?.name || "Company logo"}
+                />
+              </div>
+              <div>
+                <div className="dashboard-hero__name">{employer?.name || "Company"}</div>
+                <div className="dashboard-hero__meta">
+                  <BsBuildings />
+                  <span>{employer?.address || "Chưa cập nhật vị trí"}</span>
+                </div>
+                <div className="dashboard-hero__meta">
+                  <BsArrowUpRight />
+                  <span>{companyProfile?.name || "Tổng công ty"}</span>
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        )}
       </section>
 
       <section className="dashboard-summary-grid">
@@ -664,6 +854,51 @@ export default function EmployerDashboard() {
           </article>
         ))}
       </section>
+
+      {!isBranchScope && (
+        <section className="dashboard-panel dashboard-branch-section" onMouseMove={handleAmbientPointerMove}>
+          <div className="dashboard-panel__head dashboard-branch-section__head">
+            <div>
+              <h2>Toàn bộ chi nhánh</h2>
+              <p>Theo dõi job, hồ sơ và đội HR theo từng chi nhánh. Thao tác chi tiết ở màn quản lý chi nhánh.</p>
+            </div>
+            <button type="button" className="dashboard-secondary-btn" onClick={() => nav("/employer/branches")}>
+              <BsBuildings />
+              Quản lý chi nhánh
+            </button>
+          </div>
+
+          <div className="dashboard-branch-table">
+            {branchSummaries.map((branch) => (
+              <div key={branch.id} className="dashboard-branch-row">
+                <div className="dashboard-branch-row__main">
+                  <strong>{branch.name}</strong>
+                  <span>{branch.address || "Chưa cập nhật địa chỉ"}</span>
+                </div>
+                <div>
+                  <b>{branch.active_jobs}/{branch.total_jobs}</b>
+                  <span>Tin đang mở</span>
+                </div>
+                <div>
+                  <b>{branch.total_applications}</b>
+                  <span>Hồ sơ</span>
+                </div>
+                <div>
+                  <b>{branch.total_members}</b>
+                  <span>HR/QLCN</span>
+                </div>
+                <div className={`dashboard-branch-status ${branch.is_active ? "is-active" : "is-paused"}`}>
+                  {branch.is_headquarters ? "Trụ sở" : branch.is_active ? "Hoạt động" : "Tạm dừng"}
+                </div>
+              </div>
+            ))}
+
+            {branchSummaries.length === 0 && (
+              <div className="dashboard-empty">Chưa có chi nhánh. Hãy tạo chi nhánh trước khi phân quyền HR.</div>
+            )}
+          </div>
+        </section>
+      )}
 
       <section className="dashboard-chart-grid">
         <article className="dashboard-panel dashboard-panel--ambient" onMouseMove={handleAmbientPointerMove}>
@@ -731,17 +966,27 @@ export default function EmployerDashboard() {
         </article>
       </section>
 
+      {isProfileEditorOpen && (
+      <>
       <section id="company-info-section" className="dashboard-editor-grid">
         <article className="dashboard-panel dashboard-editor">
           <div className="dashboard-panel__head">
             <div>
-              <h2>Thông tin công ty</h2>
-              <p>Chỉnh các trường text, website, quy mô, mô tả và vị trí bản đồ.</p>
+              <h2>Thông tin {scopeLabel}</h2>
+              <p>
+                {isBranchScope
+                  ? "Dashboard này dùng vị trí chi nhánh được phân quyền, không dùng vị trí tổng công ty."
+                  : "Chỉnh các trường text, website, quy mô, mô tả và vị trí bản đồ."}
+              </p>
             </div>
+            <button type="button" className="dashboard-secondary-btn" onClick={() => setIsProfileEditorOpen(false)}>
+              <BsChevronUp />
+              Thu gọn
+            </button>
           </div>
-          <div className="dashboard-form-grid">
+          <fieldset className="dashboard-form-grid" disabled={!canEditScope}>
             <label>
-              <span>Tên công ty</span>
+              <span>Tên {scopeLabel}</span>
               <input name="name" value={companyForm.name} onChange={handleInputChange} />
             </label>
             <label>
@@ -756,44 +1001,52 @@ export default function EmployerDashboard() {
               <span>Số điện thoại</span>
               <input name="phone" value={companyForm.phone} onChange={handleInputChange} />
             </label>
-            <label>
-              <span>Website</span>
-              <input name="website" value={companyForm.website} onChange={handleInputChange} />
-            </label>
-            <label>
-              <span>Quy mô từ</span>
-              <input
-                type="number"
-                name="min_employees"
-                value={companyForm.min_employees}
-                onChange={handleInputChange}
-              />
-            </label>
-            <label>
-              <span>Quy mô đến</span>
-              <input
-                type="number"
-                name="max_employees"
-                value={companyForm.max_employees}
-                onChange={handleInputChange}
-              />
-            </label>
-            <label className="dashboard-form-grid__full">
-              <span>Mô tả công ty</span>
-              <textarea
-                rows="6"
-                name="description"
-                value={companyForm.description}
-                onChange={handleInputChange}
-              />
-            </label>
-          </div>
+            {!isBranchScope && (
+              <>
+                <label>
+                  <span>Website</span>
+                  <input name="website" value={companyForm.website} onChange={handleInputChange} />
+                </label>
+                <label>
+                  <span>Quy mô từ</span>
+                  <input
+                    type="number"
+                    name="min_employees"
+                    value={companyForm.min_employees}
+                    onChange={handleInputChange}
+                  />
+                </label>
+                <label>
+                  <span>Quy mô đến</span>
+                  <input
+                    type="number"
+                    name="max_employees"
+                    value={companyForm.max_employees}
+                    onChange={handleInputChange}
+                  />
+                </label>
+                <label className="dashboard-form-grid__full">
+                  <span>Mô tả công ty</span>
+                  <textarea
+                    rows="6"
+                    name="description"
+                    value={companyForm.description}
+                    onChange={handleInputChange}
+                  />
+                </label>
+              </>
+            )}
+          </fieldset>
 
           <div className="dashboard-map-card">
             <div className="dashboard-map-card__head">
               <div>
-                <h3>Vị trí công ty trên bản đồ</h3>
-                <p>Tìm kiếm địa điểm hoặc bấm trực tiếp lên bản đồ để ghim vị trí.</p>
+                <h3>Vị trí {scopeLabel} trên bản đồ</h3>
+                <p>
+                  {canEditScope
+                    ? "Tìm kiếm địa điểm hoặc bấm trực tiếp lên bản đồ để ghim vị trí."
+                    : "Bạn chỉ có quyền xem vị trí trong phạm vi được phân quyền."}
+                </p>
               </div>
               {hasMapLocation(companyForm) && (
                 <a
@@ -815,6 +1068,7 @@ export default function EmployerDashboard() {
                   value={mapSearchQuery}
                   onChange={(event) => setMapSearchQuery(event.target.value)}
                   placeholder="Tìm tên đường, quận, thành phố..."
+                  disabled={!canEditScope}
                   onKeyDown={(event) => {
                     if (event.key === "Enter") {
                       event.preventDefault();
@@ -823,11 +1077,21 @@ export default function EmployerDashboard() {
                   }}
                 />
               </div>
-              <button type="button" className="dashboard-secondary-btn" onClick={handleSearchMap}>
+              <button
+                type="button"
+                className="dashboard-secondary-btn"
+                onClick={handleSearchMap}
+                disabled={!canEditScope || isMapSearching}
+              >
                 {isMapSearching ? <BsArrowClockwise className="dashboard-spin" /> : <BsSearch />}
                 <span>Tìm</span>
               </button>
-              <button type="button" className="dashboard-danger-btn" onClick={handleClearMapLocation}>
+              <button
+                type="button"
+                className="dashboard-danger-btn"
+                onClick={handleClearMapLocation}
+                disabled={!canEditScope}
+              >
                 <BsTrash3Fill />
                 <span>Xóa vị trí</span>
               </button>
@@ -840,6 +1104,7 @@ export default function EmployerDashboard() {
                   value={sharedMapUrl}
                   onChange={(event) => setSharedMapUrl(event.target.value)}
                   placeholder="Dán link chia sẻ Google Maps, ví dụ https://maps.app.goo.gl/..."
+                  disabled={!canEditScope}
                   onKeyDown={(event) => {
                     if (event.key === "Enter") {
                       event.preventDefault();
@@ -852,7 +1117,7 @@ export default function EmployerDashboard() {
                 type="button"
                 className="dashboard-secondary-btn"
                 onClick={handleResolveSharedMapUrl}
-                disabled={isResolvingSharedMapUrl}
+                disabled={!canEditScope || isResolvingSharedMapUrl}
               >
                 {isResolvingSharedMapUrl ? <BsArrowClockwise className="dashboard-spin" /> : <BsPinMapFill />}
                 <span>{isResolvingSharedMapUrl ? "Đang đọc link..." : "Dùng link Google Maps"}</span>
@@ -861,7 +1126,7 @@ export default function EmployerDashboard() {
                 type="button"
                 className="dashboard-primary-btn"
                 onClick={handleUseCurrentLocation}
-                disabled={isLocatingCurrentPosition}
+                disabled={!canEditScope || isLocatingCurrentPosition}
               >
                 <BsFillGeoAltFill />
                 <span>{isLocatingCurrentPosition ? "Đang lấy GPS..." : "Dùng vị trí hiện tại"}</span>
@@ -876,6 +1141,7 @@ export default function EmployerDashboard() {
                     type="button"
                     className="dashboard-map-result"
                     onClick={() => handleSelectMapResult(result)}
+                    disabled={!canEditScope}
                   >
                     <BsFillGeoAltFill />
                     <span>{result.display_name}</span>
@@ -908,15 +1174,16 @@ export default function EmployerDashboard() {
             <button
               type="button"
               className="dashboard-primary-btn"
-              disabled={savingSection === "info"}
+              disabled={!canEditScope || savingSection === "info"}
               onClick={handleSaveCompanyInfo}
             >
-              {savingSection === "info" ? "Đang lưu..." : "Lưu thông tin công ty"}
+              {savingSection === "info" ? "Đang lưu..." : `Lưu thông tin ${scopeLabel}`}
             </button>
           </div>
         </article>
       </section>
 
+      {!isBranchScope && (
       <section className="dashboard-editor-grid">
         <article id="company-logo-section" className="dashboard-panel dashboard-asset-card">
           <div className="dashboard-panel__head">
@@ -927,7 +1194,7 @@ export default function EmployerDashboard() {
           </div>
           <div className="dashboard-asset-card__preview dashboard-asset-card__preview--logo">
             <AppImage
-              src={logoPreview || employer?.logo}
+              src={logoPreview || companyProfile?.logo}
               fallbackVariant="logo"
               alt={employer?.name || "Logo"}
             />
@@ -956,7 +1223,7 @@ export default function EmployerDashboard() {
           </div>
           <div className="dashboard-asset-card__preview dashboard-asset-card__preview--cover">
             <AppImage
-              src={coverPreview || employer?.image}
+              src={coverPreview || companyProfile?.image}
               fallbackVariant="cover"
               alt={employer?.name || "Cover"}
             />
@@ -976,6 +1243,9 @@ export default function EmployerDashboard() {
           </button>
         </article>
       </section>
+      )}
+      </>
+      )}
     </div>
   );
 }

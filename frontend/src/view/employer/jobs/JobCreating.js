@@ -1,328 +1,305 @@
+import { useEffect } from "react";
 import { useForm } from "react-hook-form";
-import { AiOutlineLine } from "react-icons/ai";
 import jobApi from "../../../api/job";
 
 const toArray = (value) => {
-  if (value === undefined || value === null || value === "") {
-    return [];
-  }
-
-  return (Array.isArray(value) ? value : [value]).filter(
-    (item) => item !== false
-  );
+  if (value === undefined || value === null || value === "") return [];
+  return (Array.isArray(value) ? value : [value]).filter(Boolean);
 };
 
-function JobCreating({ jtypes, jlevels, industries, locations, skills }) {
+const toNumberOrNull = (value) => {
+  if (value === undefined || value === null || value === "") return null;
+  return Number(value);
+};
+
+const buildJobPayload = (form) => {
+  const payload = {
+    jname: form.jname?.trim(),
+    branch_id: Number(form.branch_id),
+    jtype_id: Number(form.jtype_id),
+    jlevel_id: Number(form.jlevel_id),
+    industries: toArray(form.industries).map(Number),
+    required_skills: toArray(form.required_skills).map(Number),
+    preferred_skills: toArray(form.preferred_skills).map(Number),
+    work_location_type: form.work_location_type || "onsite",
+    amount: toNumberOrNull(form.amount),
+    min_salary: form.salaryOpt === "fixed" ? toNumberOrNull(form.min_salary) : null,
+    max_salary: form.salaryOpt === "fixed" ? toNumberOrNull(form.max_salary) : null,
+    yoe: toNumberOrNull(form.yoe),
+    education_level: form.education_level || null,
+    required_languages: form.required_languages || null,
+    required_certificates: form.required_certificates || null,
+    description: form.description?.trim(),
+    requirements: form.requirements || null,
+    benefits: form.benefits || null,
+    expire_at: form.expire_at,
+    status: form.status || "active",
+  };
+
+  if (payload.work_location_type === "special") {
+    payload.special_address = form.special_address?.trim() || "";
+    payload.map_lat = toNumberOrNull(form.map_lat);
+    payload.map_lng = toNumberOrNull(form.map_lng);
+  }
+
+  return payload;
+};
+
+function JobCreating({ jtypes, jlevels, industries, skills, branches }) {
   const {
     register,
-    formState: { errors },
     handleSubmit,
     watch,
-  } = useForm();
+    setValue,
+    formState: { errors },
+  } = useForm({
+    defaultValues: {
+      work_location_type: "onsite",
+      salaryOpt: "negotiable",
+      status: "active",
+    },
+  });
 
-  const onSubmit = async (job_inf) => {
-    // console.log(job_inf);
-    job_inf.industries = toArray(job_inf.industries).map(
-      (industryIndex) => industries[industryIndex].id
-    );
-    job_inf.locations = toArray(job_inf.locations).map(
-      (locationIndex) => locations[locationIndex].id
-    );
-    job_inf.skills = toArray(job_inf.skills).map(
-      (skillIndex) => skills[skillIndex].id
-    );
-    delete job_inf.salaryOpt;
-    if (job_inf.yoe === "") delete job_inf.yoe;
-    if (job_inf.min_salary === "") delete job_inf.min_salary;
-    if (job_inf.max_salary === "") delete job_inf.max_salary;
-    console.log(job_inf);
+  const activeBranches = branches.filter((branch) => String(branch.is_active) !== "0" && branch.is_active !== false);
+  const selectedBranch = activeBranches.find((branch) => String(branch.id) === String(watch("branch_id")));
+  const locationType = watch("work_location_type") || "onsite";
+  const salaryOpt = watch("salaryOpt") || "negotiable";
 
-    await jobApi.create(job_inf);
-    alert("Tạo mới thành công!");
-    window.location.reload();
+  useEffect(() => {
+    if (!watch("branch_id") && activeBranches.length > 0) {
+      setValue("branch_id", String(activeBranches[0].id));
+    }
+  }, [activeBranches, setValue, watch]);
+
+  const onSubmit = async (form) => {
+    try {
+      await jobApi.create(buildJobPayload(form));
+      alert("Tạo tin tuyển dụng thành công.");
+      window.location.reload();
+    } catch (error) {
+      alert(error?.response?.data?.message || "Không thể tạo tin tuyển dụng.");
+    }
   };
 
   return (
     <div className="modal modal-xl fade" id="jobCreating">
       <div className="modal-dialog modal-fullscreen-md-down modal-dialog-scrollable">
-        <div className="modal-content">
+        <div className="modal-content job-editor-modal">
           <div className="modal-header">
-            <h5 className="ms-2">Thêm việc làm mới</h5>
-            <button
-              type="button"
-              className="btn btn-sm btn-close"
-              data-bs-dismiss="modal"
-            />
+            <div>
+              <div className="job-editor-eyebrow">Tin tuyển dụng mới</div>
+              <h5 className="mb-0">Tạo tin theo chi nhánh</h5>
+            </div>
+            <button type="button" className="btn btn-sm btn-close" data-bs-dismiss="modal" />
           </div>
-          <div
-            className="modal-body text-start mb-4"
-            style={{ fontSize: "16px" }}
-          >
-            <form className="ms-5" onSubmit={handleSubmit(onSubmit)}>
-              <div>
-                <strong>Tên:</strong>
-                <input
-                  type="text"
-                  className="form-control w-50 mt-1"
-                  placeholder="Nhập tên việc làm"
-                  required
-                  {...register("jname")}
-                />
-              </div>
-              <div className="mt-2">
-                <strong>Ngành nghề:</strong>
-                <div className="d-flex mt-2">
-                  <span>Chọn:</span>
-                  <select
-                    className="form-select w-25 ms-2"
-                    multiple
-                    size="4"
-                    required
-                    {...register("industries")}
-                  >
-                    {industries.map((item, index) => (
-                      <option value={index} key={"industry" + item.id}>
-                        {item.name}
-                      </option>
-                    ))}
-                  </select>
+          <div className="modal-body text-start">
+            <form className="job-editor-form" onSubmit={handleSubmit(onSubmit)}>
+              <section className="job-editor-section">
+                <div>
+                  <h3>Thông tin chính</h3>
+                  <p>Chọn chi nhánh trước để hệ thống tự lấy địa chỉ và tọa độ bản đồ.</p>
                 </div>
-                {watch("industries") && watch("industries").length > 0 ? (
-                  <div
-                    className="form-control disabled-field mt-2"
-                    style={{ width: "50%" }}
-                  >
-                    {watch("industries").map((item, index) => (
-                      <span key={"cur_industry" + item}>
-                        {industries[item].name}
-                        {index !== watch("industries").length - 1 && ", "}
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-              <div className="mt-2">
-                <strong>Hình thức việc làm:</strong>
-                <select
-                  className="form-select w-50 mt-1"
-                  {...register("jtype_id", { required: true })}
-                >
-                  {jtypes.map((item) => (
-                    <option key={item.name} value={item.id}>
-                      {item.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="mt-2">
-                <strong>Kỹ năng yêu cầu:</strong>
-                <div className="d-flex mt-2">
-                  <span>Chọn:</span>
-                  <div
-                    className="d-grid gap-2 ms-2"
-                    style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", width: "75%" }}
-                  >
-                    {skills.map((item, index) => (
-                      <label
-                        className="form-check border rounded px-3 py-2 mb-0"
-                        key={"skill" + item.id}
-                        style={{ cursor: "pointer" }}
-                      >
+                <div className="job-editor-grid">
+                  <label className="job-field job-field--wide">
+                    <span>Chức danh</span>
+                    <input
+                      placeholder="Ví dụ: Nhân viên kinh doanh B2B"
+                      {...register("jname", { required: true, maxLength: 150 })}
+                    />
+                    {errors.jname && <small>Vui lòng nhập chức danh.</small>}
+                  </label>
+                  <label className="job-field">
+                    <span>Chi nhánh phụ trách</span>
+                    <select {...register("branch_id", { required: true })}>
+                      {activeBranches.map((branch) => (
+                        <option key={branch.id} value={branch.id}>
+                          {branch.name}
+                        </option>
+                      ))}
+                    </select>
+                    {selectedBranch?.address && <em>{selectedBranch.address}</em>}
+                  </label>
+                  <label className="job-field">
+                    <span>Hình thức làm việc</span>
+                    <select {...register("work_location_type")}>
+                      <option value="onsite">Làm tại chi nhánh</option>
+                      <option value="hybrid">Hybrid</option>
+                      <option value="remote">Remote</option>
+                      <option value="special">Địa điểm riêng</option>
+                    </select>
+                  </label>
+                  {locationType === "special" && (
+                    <>
+                      <label className="job-field job-field--wide">
+                        <span>Địa điểm riêng</span>
                         <input
-                          type="checkbox"
-                          className="form-check-input me-2"
-                          value={index}
-                          {...register("skills")}
+                          placeholder="Nhập địa chỉ hợp lệ cho job đặc biệt"
+                          {...register("special_address", { required: true })}
                         />
-                        <span className="form-check-label">{item.name}</span>
                       </label>
-                    ))}
-                  </div>
-                </div>
-                {toArray(watch("skills")).length > 0 ? (
-                  <div
-                    className="form-control disabled-field mt-2"
-                    style={{ width: "50%" }}
-                  >
-                    {toArray(watch("skills")).map((item, index) => (
-                      <span key={"cur_skill" + item}>
-                        {skills[item].name}
-                        {index !== toArray(watch("skills")).length - 1 && ", "}
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-              {errors.jtype_id && (
-                <span className="text-danger">Vui lòng chọn 1 lựa chọn</span>
-              )}
-              <div className="mt-2">
-                <strong>Cấp bậc:</strong>
-                <select
-                  className="form-select w-50 mt-1"
-                  {...register("jlevel_id", { required: true })}
-                >
-                  {jlevels.map((item) => (
-                    <option key={item.name} value={item.id}>
-                      {item.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="mt-2">
-                <strong>Tỉnh thành:</strong>
-                <div className="d-flex mt-2">
-                  <span>Chọn:</span>
-                  <select
-                    className="form-select w-25 ms-2"
-                    multiple
-                    size="6"
-                    required
-                    {...register("locations")}
-                  >
-                    {locations.map((item, index) => (
-                      <option value={index} key={"location" + item.id}>
-                        {item.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                {watch("locations") && watch("locations").length > 0 ? (
-                  <div
-                    className="form-control disabled-field mt-2"
-                    style={{ width: "50%" }}
-                  >
-                    {watch("locations").map((item, index) => (
-                      <span key={"cur_location" + item}>
-                        {locations[item].name}
-                        {index !== watch("locations").length - 1 && ", "}
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-              <div className="mt-2">
-                <strong>Địa chỉ:</strong>
-                <textarea
-                  rows="4"
-                  className="form-control mt-1 w-75"
-                  placeholder="Nhập địa chỉ"
-                  required
-                  {...register("address")}
-                />
-              </div>
-              {errors.jlevel_id && (
-                <span className="text-danger">Vui lòng chọn 1 lựa chọn</span>
-              )}
-              <div className="mt-2 d-flex align-items-center">
-                <strong>Số lượng tuyển:</strong>
-                <input
-                  type="number"
-                  className="form-control ms-2"
-                  style={{ width: "70px" }}
-                  required
-                  {...register("amount", { min: 1 })}
-                />
-              </div>
-              {errors.amount?.type === "min" && (
-                <span className="text-danger">Hãy nhập 1 số lớn hơn 0</span>
-              )}
-              <div className="mt-2">
-                <div className="d-flex align-items-center">
-                  <strong>Lương:</strong>
-                </div>
-                <div className="form-check mt-1">
-                  <input
-                    type="radio"
-                    className="form-check-input"
-                    name="salaryOpt"
-                    value="0"
-                    {...register("salaryOpt")}
-                  />
-                  Theo thỏa thuận <br />
-                  <input
-                    type="radio"
-                    className="form-check-input"
-                    name="salaryOpt"
-                    value="1"
-                    {...register("salaryOpt")}
-                  />
-                  Cụ thể <br />
-                  <span className="text-danger">
-                    {!watch("salaryOpt") && "Mời chọn 1 trong 2 lựa chọn trên"}
-                  </span>
-                  {watch("salaryOpt") === "1" && (
-                    <div className="d-flex mt-1 align-items-center">
-                      <input
-                        type="number"
-                        className="form-control"
-                        style={{ width: "70px" }}
-                        required
-                        {...register("min_salary")}
-                      />
-                      <AiOutlineLine
-                        className="mx-1"
-                        style={{ fontSize: "14px" }}
-                      />
-                      <input
-                        type="number"
-                        className="form-control"
-                        style={{ width: "70px" }}
-                        required
-                        {...register("max_salary")}
-                      />
-                      &nbsp; triệu VND
-                    </div>
+                      <label className="job-field">
+                        <span>Vĩ độ</span>
+                        <input type="number" step="0.000001" {...register("map_lat")} />
+                      </label>
+                      <label className="job-field">
+                        <span>Kinh độ</span>
+                        <input type="number" step="0.000001" {...register("map_lng")} />
+                      </label>
+                    </>
                   )}
+                  <label className="job-field">
+                    <span>Ngành nghề</span>
+                    <select multiple size="5" {...register("industries", { required: true })}>
+                      {industries.map((industry) => (
+                        <option key={industry.id} value={industry.id}>
+                          {industry.name}
+                        </option>
+                      ))}
+                    </select>
+                    {errors.industries && <small>Chọn ít nhất một ngành nghề.</small>}
+                  </label>
+                  <label className="job-field">
+                    <span>Hình thức tuyển dụng</span>
+                    <select {...register("jtype_id", { required: true })}>
+                      <option value="">Chọn hình thức</option>
+                      {jtypes.map((type) => (
+                        <option key={type.id} value={type.id}>
+                          {type.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="job-field">
+                    <span>Cấp bậc</span>
+                    <select {...register("jlevel_id", { required: true })}>
+                      <option value="">Chọn cấp bậc</option>
+                      {jlevels.map((level) => (
+                        <option key={level.id} value={level.id}>
+                          {level.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="job-field">
+                    <span>Số lượng tuyển</span>
+                    <input type="number" min="1" {...register("amount")} />
+                  </label>
+                  <label className="job-field">
+                    <span>Deadline</span>
+                    <input type="date" {...register("expire_at", { required: true })} />
+                  </label>
+                  <label className="job-field">
+                    <span>Trạng thái</span>
+                    <select {...register("status")}>
+                      <option value="active">Đăng ngay</option>
+                      <option value="draft">Lưu nháp</option>
+                      <option value="paused">Tạm dừng</option>
+                    </select>
+                  </label>
                 </div>
-              </div>
+              </section>
 
-              <div className="mt-3 d-flex align-items-center">
-                <strong>Yêu cầu kinh nghiệm:</strong>
-                <select
-                  className="form-select ms-1"
-                  style={{ width: "100px" }}
-                  {...register("yoe")}
-                >
-                  <option value="">Không</option>
-                  {Array.from({ length: 20 }, (e, index) => (
-                    <option value={index + 1} key={"yoe" + index}>
-                      {index + 1 + " năm"}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="mt-2 d-flex align-items-center">
-                <strong>Hạn nộp hồ sơ:</strong>
-                <input
-                  type="date"
-                  className="form-control ms-1"
-                  style={{ width: "180px" }}
-                  required
-                  {...register("expire_at")}
-                />
-              </div>
-              <div className="mt-2">
-                <strong>Mô tả việc làm:</strong>
-                <textarea
-                  rows="13"
-                  className="form-control mt-1"
-                  style={{ width: "98%" }}
-                  placeholder="Nhập mô tả việc làm"
-                  required
-                  {...register("description")}
-                />
-              </div>
-              <div className="mt-3 float-end">
-                <button type="submit" className="btn btn-primary">
-                  Tạo mới
+              <section className="job-editor-section">
+                <div>
+                  <h3>Tiêu chí matching</h3>
+                  <p>Dữ liệu càng đầy đủ thì xếp hạng ứng viên càng chính xác.</p>
+                </div>
+                <div className="job-editor-grid">
+                  <label className="job-field">
+                    <span>Kỹ năng bắt buộc</span>
+                    <select multiple size="7" {...register("required_skills", { required: true })}>
+                      {skills.map((skill) => (
+                        <option key={skill.id} value={skill.id}>
+                          {skill.name}
+                        </option>
+                      ))}
+                    </select>
+                    {errors.required_skills && <small>Chọn ít nhất một kỹ năng bắt buộc.</small>}
+                  </label>
+                  <label className="job-field">
+                    <span>Kỹ năng ưu tiên</span>
+                    <select multiple size="7" {...register("preferred_skills")}>
+                      {skills.map((skill) => (
+                        <option key={skill.id} value={skill.id}>
+                          {skill.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="job-field">
+                    <span>Kinh nghiệm tối thiểu</span>
+                    <select {...register("yoe")}>
+                      <option value="">Không bắt buộc</option>
+                      {Array.from({ length: 20 }, (_, index) => (
+                        <option value={index + 1} key={index + 1}>
+                          {index + 1} năm
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="job-field">
+                    <span>Học vấn</span>
+                    <input placeholder="Ví dụ: Cao đẳng, Đại học" {...register("education_level")} />
+                  </label>
+                  <label className="job-field">
+                    <span>Ngôn ngữ</span>
+                    <input placeholder="Ví dụ: Tiếng Anh B1, tiếng Nhật N3" {...register("required_languages")} />
+                  </label>
+                  <label className="job-field">
+                    <span>Chứng chỉ</span>
+                    <input placeholder="Ví dụ: MOS, IELTS, AWS" {...register("required_certificates")} />
+                  </label>
+                  <div className="job-field job-field--wide">
+                    <span>Lương</span>
+                    <div className="job-segment">
+                      <label>
+                        <input type="radio" value="negotiable" {...register("salaryOpt")} />
+                        Thỏa thuận
+                      </label>
+                      <label>
+                        <input type="radio" value="fixed" {...register("salaryOpt")} />
+                        Khoảng lương
+                      </label>
+                    </div>
+                    {salaryOpt === "fixed" && (
+                      <div className="job-inline-inputs">
+                        <input type="number" min="0" placeholder="Từ" {...register("min_salary")} />
+                        <input type="number" min="0" placeholder="Đến" {...register("max_salary")} />
+                        <span>triệu VND</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </section>
+
+              <section className="job-editor-section">
+                <div>
+                  <h3>Nội dung hiển thị</h3>
+                  <p>Mô tả rõ trách nhiệm, yêu cầu và quyền lợi để ứng viên tự đánh giá.</p>
+                </div>
+                <div className="job-editor-grid">
+                  <label className="job-field job-field--wide">
+                    <span>Mô tả công việc</span>
+                    <textarea rows="8" {...register("description", { required: true })} />
+                    {errors.description && <small>Vui lòng nhập mô tả công việc.</small>}
+                  </label>
+                  <label className="job-field job-field--wide">
+                    <span>Yêu cầu ứng viên</span>
+                    <textarea rows="6" {...register("requirements")} />
+                  </label>
+                  <label className="job-field job-field--wide">
+                    <span>Quyền lợi</span>
+                    <textarea rows="6" {...register("benefits")} />
+                  </label>
+                </div>
+              </section>
+
+              <div className="job-editor-actions">
+                <button type="button" className="btn btn-outline-secondary" data-bs-dismiss="modal">
+                  Đóng
                 </button>
-                <button
-                  type="button"
-                  className="btn btn-danger me-2 ms-3"
-                  data-bs-dismiss="modal"
-                >
-                  Đóng
+                <button type="submit" className="btn app-button-primary">
+                  Tạo tin
                 </button>
               </div>
             </form>

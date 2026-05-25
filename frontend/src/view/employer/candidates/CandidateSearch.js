@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   BsAward,
   BsBriefcase,
@@ -39,6 +40,23 @@ const getGenderText = (gender) => {
   if (String(gender) === "1") return "Nam";
   if (String(gender) === "0") return "Nữ";
   return "Chưa cập nhật";
+};
+
+const normalizeJobs = (res) => (Array.isArray(res) ? res : res?.data || []);
+
+const normalizeCandidateResults = (res) => {
+  const rows = Array.isArray(res) ? res : res?.data || [];
+  return rows.map((row) => {
+    if (!row?.candidate) return row;
+    return {
+      ...row.candidate,
+      match_percent: row.match_percent,
+      score: row.score,
+      reasons: row.reasons || [],
+      matched_skills: row.matched_skills || [],
+      missing_skills: row.missing_skills || row.missing_required_skills || [],
+    };
+  });
 };
 
 function CandidateSummary({ candidate }) {
@@ -101,6 +119,19 @@ function CandidateCard({ candidate, selectedJobId, onContact }) {
     <article className="talent-card">
       <CandidateSummary candidate={candidate} />
       <div className="talent-card__aside">
+        {candidate.match_percent !== undefined && (
+          <div className="talent-match">
+            <strong>{candidate.match_percent}%</strong>
+            <span>phù hợp</span>
+          </div>
+        )}
+        {candidate.reasons?.length > 0 && (
+          <div className="talent-reasons">
+            {candidate.reasons.slice(0, 3).map((reason) => (
+              <span key={reason}>{reason}</span>
+            ))}
+          </div>
+        )}
         <a href={`mailto:${candidate.email}`} className="talent-contact-link">
           <BsEnvelope />
           <span>{candidate.email}</span>
@@ -340,21 +371,33 @@ export default function CandidateSearch() {
   const [contactTarget, setContactTarget] = useState(null);
   const [isSendingContact, setIsSendingContact] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [billingRequired, setBillingRequired] = useState(false);
   const company = useSelector((state) => state.employerAuth.current.employer);
+  const permissions = useSelector((state) => state.employerAuth.current.permissions || {});
   const isAuth = useSelector((state) => state.employerAuth.isAuth);
+  const nav = useNavigate();
 
   const loadBaseData = async () => {
     try {
-      const [skillList, jobList, recommendationList] = await Promise.all([
+      const [skillList, jobList] = await Promise.all([
         jskillApi.getAll(),
         company?.id ? employerApi.getJobList(company.id, "") : Promise.resolve([]),
-        employerApi.getTalentRecommendations(),
       ]);
       setSkills(skillList || []);
-      setJobs(jobList || []);
-      setRecommendations(recommendationList || []);
+      setJobs(normalizeJobs(jobList));
     } catch (error) {
       toast.error("Không thể tải dữ liệu ứng viên.");
+    }
+
+    try {
+      const recommendationList = await employerApi.getTalentRecommendations();
+      setRecommendations(recommendationList || []);
+    } catch (error) {
+      if (error?.response?.status === 402) {
+        setBillingRequired(true);
+        return;
+      }
+      toast.error("Không thể tải gợi ý ứng viên.");
     }
   };
 
@@ -362,8 +405,14 @@ export default function CandidateSearch() {
     setIsLoading(true);
     try {
       const res = await employerApi.searchCandidates(nextFilters);
-      setCandidates(res || []);
+      setCandidates(normalizeCandidateResults(res));
+      setBillingRequired(false);
     } catch (error) {
+      if (error?.response?.status === 402) {
+        setBillingRequired(true);
+        setCandidates([]);
+        return;
+      }
       toast.error(error?.response?.data?.message || "Không thể tìm kiếm ứng viên.");
     } finally {
       setIsLoading(false);
@@ -371,12 +420,12 @@ export default function CandidateSearch() {
   };
 
   useEffect(() => {
-    if (isAuth && company?.id) {
+    if (isAuth && company?.id && permissions.search_candidates) {
       loadBaseData();
       searchCandidates(initialFilters);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAuth, company?.id]);
+  }, [isAuth, company?.id, permissions.search_candidates]);
 
   const handleChange = (event) => {
     const { name, value, type, checked } = event.target;
@@ -452,6 +501,21 @@ export default function CandidateSearch() {
     }
   };
 
+  if (Object.keys(permissions).length > 0 && !permissions.search_candidates) {
+    return (
+      <div className="talent-page">
+        <section className="talent-panel">
+          <div className="talent-panel__head">
+            <div>
+              <h2>Bạn không có quyền tìm ứng viên</h2>
+              <p>Chức năng tìm kiếm và liên hệ ứng viên chỉ dành cho tài khoản tổng công ty hoặc quản lý chi nhánh được cấp quyền.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="talent-page">
       <section className="talent-hero">
@@ -468,6 +532,18 @@ export default function CandidateSearch() {
           <span>{recommendations.length} gợi ý phù hợp</span>
         </div>
       </section>
+
+      {billingRequired && (
+        <section className="talent-panel talent-billing-lock">
+          <div>
+            <h2>Cần gói dịch vụ để tìm ứng viên</h2>
+            <p>Tính năng tìm kiếm, gợi ý và liên hệ ứng viên chỉ mở khóa sau khi thanh toán.</p>
+          </div>
+          <button type="button" className="talent-primary-btn" onClick={() => nav("/employer/billing")}>
+            Xem gói dịch vụ
+          </button>
+        </section>
+      )}
 
       <section className="talent-panel talent-panel--accent">
         <div className="talent-panel__head">

@@ -7,20 +7,27 @@ use App\Models\Candidate;
 use Illuminate\Http\Request;
 use App\Models\Job;
 use App\Models\User;
+use App\Services\CompanyAccessService;
+use App\Services\EmployerBillingService;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 
 class JobController extends Controller
 {
     public function index(Request $req)
     {
-        $jobs = Job::with(['employer', 'locations'])
+        $jobs = Job::with(['employer:id,name,logo', 'locations:id,name', 'branch:id,name,address'])
             ->join('employers', 'jobs.employer_id', '=', 'employers.id')
             ->where('jobs.is_active', 1)
             ->where('employers.is_active', 1)
+            ->where(function ($query) {
+                $query->whereNull('jobs.status')
+                    ->orWhere('jobs.status', 'active');
+            })
             ->when($req->keyword !== null, function ($query) use ($req) {
                 // return $query->join('employers', 'employer_id', '=', 'employers.id')
                 //     ->whereRaw('LOWER(employers.name) LIKE ?', ['%' . strtolower($req->keyword) . '%']);
@@ -43,26 +50,19 @@ class JobController extends Controller
             ->when($req->jlevel_id !== null, function ($query) use ($req) {
                 return $query->where('jlevel_id', '=', $req->jlevel_id);
             })
+            ->when($req->posting_period !== null, function ($query) use ($req) {
+                return $query->where('jobs.created_at', '>=', Carbon::now()->subDays((int) $req->posting_period));
+            })
             ->orderByDesc('jobs.updated_at')
             ->select('jobs.*')
             ->distinct()
             ->paginate(9);
 
-        $jobs = $jobs->toArray();
-        $currentTime = Carbon::now();
-
-        if ($req->posting_period) {
-            $jobs['data'] = array_filter(
-                $jobs['data'],
-                fn ($item) => $currentTime->diffInDays($item['created_at']) <= $req->posting_period
-            );
-        }
-
         return response()->json($jobs);
     }
     public function show($id)
     {
-        $job = Job::with(['employer', 'jtype', 'jlevel', 'industries'])
+        $job = Job::with(['employer', 'jtype', 'jlevel', 'industries', 'skills', 'branch'])
             ->join('employers', 'jobs.employer_id', '=', 'employers.id')
             ->where('jobs.id', $id)
             ->where('jobs.is_active', 1)
@@ -100,74 +100,98 @@ class JobController extends Controller
 
         return response()->json($res);
     }
-    public function create(Request $req)
+    public function create(Request $req, CompanyAccessService $access)
     {
-        $new_record = $req->all();
-
-        $industries = $new_record['industries'];
-        unset($new_record['industries']);
-        $locations = $new_record['locations'];
-        unset($new_record['locations']);
-        $skills = $new_record['skills'] ?? [];
-        unset($new_record['skills']);
-
-        $new_record['employer_id'] = Auth::user()->id;
-
-        $job = Job::create($new_record);
-        for ($i = 0; $i < count($industries); $i++) {
-            $job_industries[$i] = collect(['job_id' => $job->id, 'industry_id' => $industries[$i]])->toArray();
+        $member = $access->requirePermission('manage_jobs');
+        $billingAccess = app(EmployerBillingService::class)->checkAccessForEmployerUser(Auth::id(), 'job_post');
+        if (!$billingAccess['allowed']) {
+            return response()->json([
+                'message' => $billingAccess['message'],
+                'code' => $billingAccess['code'],
+                'billing_url' => '/employer/billing',
+            ], 402);
         }
-        DB::table('job_industry')->insert($job_industries);
 
-        for ($i = 0; $i < count($locations); $i++) {
-            $job_locations[$i] = collect(['job_id' => $job->id, 'location_id' => $locations[$i]])->toArray();
-        }
-        DB::table('job_location')->insert($job_locations);
+        $validated = $this->validateJobPayload($req, true);
+        $branch = $access->assertBranchBelongsToCompany((int) $validated['branch_id'], $member);
+        $status = $validated['status'] ?? 'active';
 
-        $this->syncJobSkills($job->id, $skills);
+        $job = DB::transaction(function () use ($validated, $branch, $member, $status, $billingAccess, $access) {
+            $job = Job::create($this->jobFieldsFromPayload($validated, $branch, [
+                'employer_id' => $member->employer_id,
+                'branch_id' => $branch->id,
+                'posted_by_user_id' => Auth::id(),
+                'is_active' => $status === 'active' ? 1 : 0,
+                'status' => $status,
+            ]));
 
-        return response()->json('Updated successfully');
+            $this->syncJobIndustries($job->id, $validated['industries'] ?? []);
+            $this->syncJobLocations($job->id, $validated['locations'] ?? []);
+            $this->syncJobSkillsByType(
+                $job->id,
+                $validated['required_skills'] ?? ($validated['skills'] ?? []),
+                $validated['preferred_skills'] ?? []
+            );
+
+            app(EmployerBillingService::class)->consumeJobPost($billingAccess['subscription']);
+            $access->log('job.created', Job::class, $job->id, null, $job->fresh()->toArray());
+
+            return $job->fresh(['branch', 'industries', 'skills']);
+        });
+
+        return response()->json($job, 201);
     }
-    public function update(Request $req, $id = null)
+    public function update(Request $req, CompanyAccessService $access, $id = null)
     {
+        $access->requirePermission('manage_jobs');
         $jobId = $id ?? $req->id;
-        $update_fields = $req->all();
-        if (isset($update_fields['industries'])) {
-            $industries = $update_fields['industries'];
-            unset($update_fields['industries']);
+        $job = $access->assertCanAccessJob((int) $jobId);
+        $validated = $this->validateJobPayload($req, false);
+        $before = $job->toArray();
 
-            //update job_industry
-            DB::table('job_industry')->where('job_id', $jobId)->delete();
-            for ($i = 0; $i < count($industries); $i++) {
-                $job_industries[$i] = collect(['job_id' => $jobId, 'industry_id' => $industries[$i]])->toArray();
+        DB::transaction(function () use ($validated, $job, $access, $before) {
+            $branch = null;
+            if (array_key_exists('branch_id', $validated)) {
+                $branch = $access->assertBranchBelongsToCompany((int) $validated['branch_id']);
+            } elseif ($job->branch_id) {
+                $branch = $job->branch;
             }
-            DB::table('job_industry')->insert($job_industries);
-        }
-        if (isset($update_fields['locations'])) {
-            $locations = $update_fields['locations'];
-            unset($update_fields['locations']);
 
-            //update job_location
-            DB::table('job_location')->where('job_id', $jobId)->delete();
-            for ($i = 0; $i < count($locations); $i++) {
-                $job_locations[$i] = collect(['job_id' => $jobId, 'location_id' => $locations[$i]])->toArray();
+            $status = $validated['status'] ?? null;
+            $fields = $this->jobFieldsFromPayload($validated, $branch, []);
+            if ($status !== null) {
+                $fields['status'] = $status;
+                $fields['is_active'] = $status === 'active' ? 1 : 0;
             }
-            DB::table('job_location')->insert($job_locations);
-        }
-        if (isset($update_fields['skills'])) {
-            $skills = $update_fields['skills'];
-            unset($update_fields['skills']);
 
-            $this->syncJobSkills($jobId, $skills);
-        }
-        if (count($update_fields) > 0) {
-            unset($update_fields['id']);
-            Job::where('id', $jobId)
-                ->update($update_fields);
-        }
-        $msg = 'Update successfully';
+            if (count($fields) > 0) {
+                $job->update($fields);
+            }
 
-        return response()->json($msg);
+            if (array_key_exists('industries', $validated)) {
+                $this->syncJobIndustries($job->id, $validated['industries'] ?? []);
+            }
+
+            if (array_key_exists('locations', $validated)) {
+                $this->syncJobLocations($job->id, $validated['locations'] ?? []);
+            }
+
+            if (
+                array_key_exists('required_skills', $validated)
+                || array_key_exists('preferred_skills', $validated)
+                || array_key_exists('skills', $validated)
+            ) {
+                $this->syncJobSkillsByType(
+                    $job->id,
+                    $validated['required_skills'] ?? ($validated['skills'] ?? []),
+                    $validated['preferred_skills'] ?? []
+                );
+            }
+
+            $access->log('job.updated', Job::class, $job->id, $before, $job->fresh()->toArray());
+        });
+
+        return response()->json($job->fresh(['branch', 'industries', 'skills']));
     }
     public function getJobIndustries($id)
     {
@@ -253,23 +277,157 @@ class JobController extends Controller
         } else return response()->json(['value' => false]);
     }
 
-    private function syncJobSkills($jobId, $skills)
+    private function validateJobPayload(Request $req, bool $isCreate): array
+    {
+        $required = $isCreate ? 'required' : 'sometimes';
+
+        return $req->validate([
+            'jname' => [$required, 'string', 'max:150'],
+            'branch_id' => [$required, 'integer'],
+            'jtype_id' => [$required, 'integer', 'exists:jtypes,id'],
+            'jlevel_id' => [$required, 'integer', 'exists:jlevels,id'],
+            'industries' => [$required, 'array', 'min:1'],
+            'industries.*' => ['integer', 'exists:industries,id'],
+            'locations' => ['nullable', 'array'],
+            'locations.*' => ['integer', 'exists:locations,id'],
+            'skills' => ['nullable', 'array'],
+            'skills.*' => ['integer', 'exists:jskills,id'],
+            'required_skills' => [$isCreate ? 'required_without:skills' : 'nullable', 'array'],
+            'required_skills.*' => ['integer', 'exists:jskills,id'],
+            'preferred_skills' => ['nullable', 'array'],
+            'preferred_skills.*' => ['integer', 'exists:jskills,id'],
+            'work_location_type' => ['nullable', Rule::in(['onsite', 'hybrid', 'remote', 'special'])],
+            'special_address' => ['nullable', 'string', 'max:500'],
+            'map_lat' => ['nullable', 'numeric', 'between:-90,90'],
+            'map_lng' => ['nullable', 'numeric', 'between:-180,180'],
+            'amount' => ['nullable', 'integer', 'min:1'],
+            'min_salary' => ['nullable', 'integer', 'min:0'],
+            'max_salary' => ['nullable', 'integer', 'min:0'],
+            'yoe' => ['nullable', 'integer', 'min:0', 'max:50'],
+            'education_level' => ['nullable', 'string', 'max:120'],
+            'gender' => ['nullable', 'integer', 'in:0,1,2'],
+            'required_languages' => ['nullable', 'string'],
+            'required_certificates' => ['nullable', 'string'],
+            'description' => [$required, 'string'],
+            'requirements' => ['nullable', 'string'],
+            'benefits' => ['nullable', 'string'],
+            'expire_at' => [$required, 'date'],
+            'status' => ['nullable', Rule::in(['draft', 'active', 'paused', 'closed'])],
+        ]);
+    }
+
+    private function jobFieldsFromPayload(array $payload, $branch, array $base): array
+    {
+        $fields = $base;
+        $allowed = [
+            'jname',
+            'jtype_id',
+            'jlevel_id',
+            'amount',
+            'min_salary',
+            'max_salary',
+            'yoe',
+            'education_level',
+            'gender',
+            'work_location_type',
+            'special_address',
+            'map_lat',
+            'map_lng',
+            'required_languages',
+            'required_certificates',
+            'description',
+            'requirements',
+            'benefits',
+            'expire_at',
+        ];
+
+        foreach ($allowed as $field) {
+            if (array_key_exists($field, $payload)) {
+                $fields[$field] = $payload[$field];
+            }
+        }
+
+        if ($branch) {
+            $fields['branch_id'] = $branch->id;
+        }
+
+        $shouldResolveAddress = array_key_exists('employer_id', $base)
+            || array_key_exists('branch_id', $payload)
+            || array_key_exists('work_location_type', $payload)
+            || array_key_exists('special_address', $payload);
+
+        if ($shouldResolveAddress) {
+            $locationType = $fields['work_location_type'] ?? $payload['work_location_type'] ?? 'onsite';
+            if ($locationType === 'remote') {
+                $fields['address'] = 'Làm việc từ xa';
+            } elseif ($locationType === 'special') {
+                $fields['address'] = $payload['special_address'] ?? $fields['special_address'] ?? '';
+            } elseif ($branch) {
+                $fields['address'] = $branch->address;
+                $fields['map_lat'] = $branch->map_lat;
+                $fields['map_lng'] = $branch->map_lng;
+            }
+        }
+
+        return $fields;
+    }
+
+    private function syncJobIndustries($jobId, array $industries): void
+    {
+        DB::table('job_industry')->where('job_id', $jobId)->delete();
+        $rows = collect($industries)
+            ->filter()
+            ->unique()
+            ->map(fn ($industryId) => ['job_id' => $jobId, 'industry_id' => (int) $industryId])
+            ->values()
+            ->toArray();
+
+        if (count($rows) > 0) {
+            DB::table('job_industry')->insert($rows);
+        }
+    }
+
+    private function syncJobLocations($jobId, array $locations): void
+    {
+        DB::table('job_location')->where('job_id', $jobId)->delete();
+        $rows = collect($locations)
+            ->filter()
+            ->unique()
+            ->map(fn ($locationId) => ['job_id' => $jobId, 'location_id' => (int) $locationId])
+            ->values()
+            ->toArray();
+
+        if (count($rows) > 0) {
+            DB::table('job_location')->insert($rows);
+        }
+    }
+
+    private function syncJobSkillsByType($jobId, array $requiredSkills, array $preferredSkills): void
     {
         DB::table('job_skill')->where('job_id', $jobId)->delete();
 
-        if (!is_array($skills) || count($skills) === 0) {
-            return;
-        }
-
-        $jobSkills = collect($skills)
+        $requiredRows = collect($requiredSkills)
             ->filter(fn ($skillId) => $skillId !== null && $skillId !== '')
             ->unique()
             ->map(fn ($skillId) => [
                 'job_id' => $jobId,
                 'skill_id' => (int) $skillId,
+                'requirement_type' => 'required',
             ])
-            ->values()
-            ->toArray();
+            ->values();
+
+        $preferredRows = collect($preferredSkills)
+            ->filter(fn ($skillId) => $skillId !== null && $skillId !== '')
+            ->unique()
+            ->reject(fn ($skillId) => $requiredRows->pluck('skill_id')->contains((int) $skillId))
+            ->map(fn ($skillId) => [
+                'job_id' => $jobId,
+                'skill_id' => (int) $skillId,
+                'requirement_type' => 'preferred',
+            ])
+            ->values();
+
+        $jobSkills = $requiredRows->merge($preferredRows)->values()->toArray();
 
         if (count($jobSkills) > 0) {
             DB::table('job_skill')->insert($jobSkills);

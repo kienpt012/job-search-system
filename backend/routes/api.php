@@ -9,9 +9,12 @@ use App\Http\Controllers\API\AuthController;
 use App\Http\Controllers\CandidateController;
 use App\Http\Controllers\CandidateMessageController;
 use App\Http\Controllers\CertificateController;
+use App\Http\Controllers\CompanyBranchController;
+use App\Http\Controllers\CompanyMemberController;
 use App\Http\Controllers\EmployerController;
 use App\Http\Controllers\EmployerRegistrationController;
 use App\Http\Controllers\ExperienceController;
+use App\Http\Controllers\EmployerBillingController;
 use App\Http\Controllers\HeroSlideController;
 use App\Http\Controllers\IndustryController;
 use App\Http\Controllers\JlevelController;
@@ -53,22 +56,37 @@ Route::controller(AuthController::class)->group(function () {
 
 Route::controller(EmployerController::class)->prefix('companies')->group(function () {
     Route::get('', 'index');
-    Route::get('dashboard', 'getDashboard')->middleware('jwt');
-    Route::post('updateCurrent', 'updateCurrent')->middleware('jwt');
-    Route::post('resolveSharedMapLink', 'resolveSharedMapLink')->middleware('jwt');
+    Route::get('dashboard', 'getDashboard')->middleware(['jwt', 'employer.access']);
+    Route::post('updateCurrent', 'updateCurrent')->middleware(['jwt', 'employer.access']);
+    Route::post('resolveSharedMapLink', 'resolveSharedMapLink')->middleware(['jwt', 'employer.access']);
     Route::get('{id}/getByID', 'show');
     Route::get('getHotList', 'getHotList');
     Route::delete('{id}', 'destroy');
     Route::get('{id}/getComJobs', 'getComJobs');
-    Route::get('{id}/getJobList', 'getJobList');
-    Route::get('getCandidateList', 'getCandidateList')->middleware('jwt');
-    Route::get('searchCandidates', 'searchCandidates')->middleware('jwt');
-    Route::get('talentRecommendations', 'getTalentRecommendations')->middleware('jwt');
-    Route::get('jobs/{job_id}/recommendedCandidates', 'getRecommendedCandidates')->middleware('jwt');
-    Route::post('contactCandidate', 'contactCandidate')->middleware('jwt');
-    Route::post('processApplying', 'processApplying')->middleware('jwt');
-    Route::post('{job_id}/changeJobStatus', 'changeJobStatus');
+    Route::get('{id}/getJobList', 'getJobList')->middleware(['jwt', 'employer.access']);
+    Route::get('getCandidateList', 'getCandidateList')->middleware(['jwt', 'employer.access']);
+    Route::get('searchCandidates', 'searchCandidates')->middleware(['jwt', 'employer.access']);
+    Route::get('talentRecommendations', 'getTalentRecommendations')->middleware(['jwt', 'employer.access']);
+    Route::get('jobs/{job_id}/recommendedCandidates', 'getRecommendedCandidates')->middleware(['jwt', 'employer.access']);
+    Route::post('contactCandidate', 'contactCandidate')->middleware(['jwt', 'employer.access']);
+    Route::post('processApplying', 'processApplying')->middleware(['jwt', 'employer.access']);
+    Route::post('{job_id}/changeJobStatus', 'changeJobStatus')->middleware(['jwt', 'employer.access']);
 });
+
+Route::middleware(['jwt', 'employer.access'])->prefix('employer')->group(function () {
+    Route::get('me', [EmployerController::class, 'me']);
+    Route::get('jobs', [EmployerController::class, 'getJobList']);
+    Route::apiResource('branches', CompanyBranchController::class)->only(['index', 'store', 'update', 'destroy']);
+    Route::apiResource('members', CompanyMemberController::class)->only(['index', 'store', 'update', 'destroy']);
+});
+
+Route::controller(EmployerBillingController::class)->prefix('employer/billing')->middleware('jwt')->group(function () {
+    Route::get('summary', 'summary');
+    Route::post('checkout', 'checkout');
+    Route::post('payments/{orderCode}/sync', 'sync');
+});
+
+Route::post('payments/payos/webhook', [EmployerBillingController::class, 'webhook']);
 
 Route::controller(AdminController::class)->prefix('admin')->middleware('jwt')->group(function () {
     Route::get('dashboard', 'getDashboard');
@@ -113,8 +131,8 @@ Route::controller(JobController::class)->prefix('jobs')->group(function () {
     Route::get('', 'index');
     Route::get('{id}/getByID', 'show');
     Route::get('getHotList', 'getHotList');
-    Route::post('', 'create');
-    Route::post('{id}/update', 'update');
+    Route::post('', 'create')->middleware(['jwt', 'employer.access']);
+    Route::post('{id}/update', 'update')->middleware(['jwt', 'employer.access']);
     Route::get('{id}/getJobIndustries', 'getJobIndustries');
     Route::get('{id}/getJobSkills', 'getJobSkills');
     Route::post('{id}/apply', 'apply')->middleware('jwt');
@@ -159,72 +177,72 @@ Route::controller(CandidateMessageController::class)->prefix('cand-msgs')->group
 
 Route::controller(EducationController::class)->prefix('educations')->group(function () {
     Route::get('', 'index');
-    Route::get('getByCurrentCandidateProfile', 'getByCurrentCandidateProfile');
-    Route::get('{resume_id}/getByCurCandResumeId', 'getByCurCandResumeId');
-    Route::post('', 'create');
-    Route::delete('{id}', 'destroy');
-    Route::post('update/{id}', 'update');
+    Route::get('getByCurrentCandidateProfile', 'getByCurrentCandidateProfile')->middleware('jwt');
+    Route::get('{resume_id}/getByCurCandResumeId', 'getByCurCandResumeId')->middleware('jwt');
+    Route::post('', 'create')->middleware('jwt');
+    Route::delete('{id}', 'destroy')->middleware('jwt');
+    Route::post('update/{id}', 'update')->middleware('jwt');
 });
 Route::controller(ExperienceController::class)->prefix('experiences')->group(function () {
     Route::get('', 'index');
-    Route::get('getByCurrentCandidateProfile', 'getByCurrentCandidateProfile');
-    Route::get('{resume_id}/getByCurCandResumeId', 'getByCurCandResumeId');
-    Route::post('', 'create');
-    Route::delete('{id}', 'destroy');
-    Route::patch('{id}', 'update');
+    Route::get('getByCurrentCandidateProfile', 'getByCurrentCandidateProfile')->middleware('jwt');
+    Route::get('{resume_id}/getByCurCandResumeId', 'getByCurCandResumeId')->middleware('jwt');
+    Route::post('', 'create')->middleware('jwt');
+    Route::delete('{id}', 'destroy')->middleware('jwt');
+    Route::patch('{id}', 'update')->middleware('jwt');
 });
 Route::controller(SkillController::class)->prefix('skills')->group(function () {
     Route::get('', 'index');
-    Route::get('getByCurrentCandidateProfile', 'getByCurrentCandidateProfile');
-    Route::get('{resume_id}/getByCurCandResumeId', 'getByCurCandResumeId');
-    Route::post('', 'create');
-    Route::delete('{id}', 'destroy');
-    Route::patch('{id}', 'update');
+    Route::get('getByCurrentCandidateProfile', 'getByCurrentCandidateProfile')->middleware('jwt');
+    Route::get('{resume_id}/getByCurCandResumeId', 'getByCurCandResumeId')->middleware('jwt');
+    Route::post('', 'create')->middleware('jwt');
+    Route::delete('{id}', 'destroy')->middleware('jwt');
+    Route::patch('{id}', 'update')->middleware('jwt');
 });
 Route::controller(ProjectController::class)->prefix('projects')->group(function () {
     Route::get('', 'index');
-    Route::get('getByCurrentCandidateProfile', 'getByCurrentCandidateProfile');
-    Route::get('{resume_id}/getByCurCandResumeId', 'getByCurCandResumeId');
-    Route::post('', 'create');
-    Route::delete('{id}', 'destroy');
-    Route::patch('{id}', 'update');
+    Route::get('getByCurrentCandidateProfile', 'getByCurrentCandidateProfile')->middleware('jwt');
+    Route::get('{resume_id}/getByCurCandResumeId', 'getByCurCandResumeId')->middleware('jwt');
+    Route::post('', 'create')->middleware('jwt');
+    Route::delete('{id}', 'destroy')->middleware('jwt');
+    Route::patch('{id}', 'update')->middleware('jwt');
 });
 Route::controller(CertificateController::class)->prefix('certificates')->group(function () {
     Route::get('', 'index');
-    Route::get('getByCurrentCandidateProfile', 'getByCurrentCandidateProfile');
-    Route::get('{resume_id}/getByCurCandResumeId', 'getByCurCandResumeId');
-    Route::post('', 'create');
-    Route::delete('{id}', 'destroy');
-    Route::post('/update/{id}', 'update');
+    Route::get('getByCurrentCandidateProfile', 'getByCurrentCandidateProfile')->middleware('jwt');
+    Route::get('{resume_id}/getByCurCandResumeId', 'getByCurCandResumeId')->middleware('jwt');
+    Route::post('', 'create')->middleware('jwt');
+    Route::delete('{id}', 'destroy')->middleware('jwt');
+    Route::post('/update/{id}', 'update')->middleware('jwt');
 });
 Route::controller(PrizeController::class)->prefix('prizes')->group(function () {
     Route::get('', 'index');
-    Route::get('getByCurrentCandidateProfile', 'getByCurrentCandidateProfile');
-    Route::get('{resume_id}/getByCurCandResumeId', 'getByCurCandResumeId');
-    Route::post('', 'create');
-    Route::delete('{id}', 'destroy');
-    Route::post('/update/{id}', 'update');
+    Route::get('getByCurrentCandidateProfile', 'getByCurrentCandidateProfile')->middleware('jwt');
+    Route::get('{resume_id}/getByCurCandResumeId', 'getByCurCandResumeId')->middleware('jwt');
+    Route::post('', 'create')->middleware('jwt');
+    Route::delete('{id}', 'destroy')->middleware('jwt');
+    Route::post('/update/{id}', 'update')->middleware('jwt');
 });
 Route::controller(ActivityController::class)->prefix('activities')->group(function () {
     Route::get('', 'index');
-    Route::get('getByCurrentCandidateProfile', 'getByCurrentCandidateProfile');
-    Route::get('{resume_id}/getByCurCandResumeId', 'getByCurCandResumeId');
-    Route::post('', 'create');
-    Route::delete('{id}', 'destroy');
-    Route::patch('{id}', 'update');
+    Route::get('getByCurrentCandidateProfile', 'getByCurrentCandidateProfile')->middleware('jwt');
+    Route::get('{resume_id}/getByCurCandResumeId', 'getByCurCandResumeId')->middleware('jwt');
+    Route::post('', 'create')->middleware('jwt');
+    Route::delete('{id}', 'destroy')->middleware('jwt');
+    Route::patch('{id}', 'update')->middleware('jwt');
 });
 Route::controller(OtherController::class)->prefix('others')->group(function () {
     Route::get('', 'index');
-    Route::get('getByCurrentCandidateProfile', 'getByCurrentCandidateProfile');
-    Route::get('{resume_id}/getByCurCandResumeId', 'getByCurCandResumeId');
-    Route::post('', 'create');
-    Route::delete('{id}', 'destroy');
-    Route::patch('{id}', 'update');
+    Route::get('getByCurrentCandidateProfile', 'getByCurrentCandidateProfile')->middleware('jwt');
+    Route::get('{resume_id}/getByCurCandResumeId', 'getByCurCandResumeId')->middleware('jwt');
+    Route::post('', 'create')->middleware('jwt');
+    Route::delete('{id}', 'destroy')->middleware('jwt');
+    Route::patch('{id}', 'update')->middleware('jwt');
 });
 Route::controller(ResumeController::class)->prefix('resumes')->group(function () {
-    Route::get('getByCurrentCandidate', 'getByCurrentCandidate');
-    Route::get('{id}/getById', 'getById');
-    Route::post('', 'create');
-    Route::post('update', 'update');
-    Route::delete('{id}', 'destroy');
+    Route::get('getByCurrentCandidate', 'getByCurrentCandidate')->middleware('jwt');
+    Route::get('{id}/getById', 'getById')->middleware('jwt');
+    Route::post('', 'create')->middleware('jwt');
+    Route::post('update', 'update')->middleware('jwt');
+    Route::delete('{id}', 'destroy')->middleware('jwt');
 });

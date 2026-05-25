@@ -5,6 +5,8 @@ namespace App\Http\Controllers;
 use App\Models\Employer;
 use App\Models\Job;
 use App\Models\User;
+use App\Services\CompanyAccessService;
+use App\Services\GoogleMapLinkResolver;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -139,6 +141,7 @@ class AdminController extends Controller
             }
 
             $employer->save();
+            app(CompanyAccessService::class)->ensureOwnerMemberForEmployer($employer);
 
             return $employer->fresh();
         });
@@ -252,7 +255,7 @@ class AdminController extends Controller
         return response()->json($updatedCompany);
     }
 
-    public function resolveSharedMapLink(Request $request)
+    public function resolveSharedMapLink(Request $request, GoogleMapLinkResolver $mapResolver)
     {
         $this->ensureAdmin();
 
@@ -260,7 +263,7 @@ class AdminController extends Controller
             'url' => 'required|string|max:1000',
         ]);
 
-        $resolved = $this->resolveGoogleMapUrl($request->input('url'));
+        $resolved = $mapResolver->resolve($request->input('url'));
 
         if (!$resolved) {
             return response()->json([

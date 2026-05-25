@@ -1,20 +1,23 @@
 import { AiTwotoneAppstore } from "react-icons/ai";
 import {
   BsBellFill,
+  BsBuildings,
+  BsCreditCard2Front,
   BsFillBriefcaseFill,
   BsFillPeopleFill,
   BsFillPersonFill,
   BsLightningChargeFill,
+  BsPersonPlusFill,
   BsSearch,
 } from "react-icons/bs";
 import { useNavigate, useLocation } from "react-router-dom";
-import "./layout_style.css";
-import { useContext, useEffect } from "react";
+import { useContext, useEffect, useMemo } from "react";
 import { useDispatch, useSelector } from "react-redux";
+import clsx from "clsx";
 import authApi from "../../../api/auth";
 import { employerAuthActions } from "../../../redux/slices/employerAuthSlice";
 import { AppContext } from "../../../App";
-import clsx from "clsx";
+import "./layout_style.css";
 
 const handleAmbientPointerMove = (event) => {
   const rect = event.currentTarget.getBoundingClientRect();
@@ -26,20 +29,84 @@ function Layout(props) {
   const nav = useNavigate();
   const location = useLocation();
   const { setCurrentPage } = useContext(AppContext);
-  const company = useSelector((state) => state.employerAuth.current.employer);
+  const current = useSelector((state) => state.employerAuth.current || {});
+  const company = current.employer;
+  const permissions = current.permissions || {};
   const dispatch = useDispatch();
   const activePath = location.pathname;
 
+  const hasPermission = (key, fallback = false) => Boolean(permissions[key] ?? fallback);
+  const permissionsLoaded = Object.keys(permissions).length > 0;
+
+  const menuItems = useMemo(
+    () =>
+      [
+        {
+          path: "/employer",
+          label: "Dashboard",
+          icon: <AiTwotoneAppstore className="fs-5 me-1" />,
+          visible: true,
+        },
+        {
+          path: "/employer/jobs",
+          label: "Việc làm",
+          icon: <BsFillBriefcaseFill className="ts-lg me-1" />,
+          visible: hasPermission("view_jobs", true),
+        },
+        {
+          path: "/employer/branches",
+          label: "Chi nhánh",
+          icon: <BsBuildings className="fs-5 me-1" />,
+          visible: hasPermission("view_branches"),
+        },
+        {
+          path: "/employer/members",
+          label: "Tài khoản HR",
+          icon: <BsPersonPlusFill className="fs-5 me-1" />,
+          visible: hasPermission("view_members"),
+        },
+        {
+          path: "/employer/candidates",
+          label: "Hồ sơ ứng tuyển",
+          icon: <BsFillPeopleFill className="fs-5 me-1" />,
+          visible: hasPermission("view_applications", true),
+        },
+        {
+          path: "/employer/candidate-search",
+          label: "Tìm ứng viên",
+          icon: <BsSearch className="fs-5 me-1" />,
+          visible: hasPermission("search_candidates"),
+        },
+        {
+          path: "/employer/billing",
+          label: "Thanh toán",
+          icon: <BsCreditCard2Front className="fs-5 me-1" />,
+          visible: hasPermission("manage_billing"),
+        },
+      ].filter((item) => item.visible),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [permissions]
+  );
+
   const handleLogout = async () => {
-    await authApi.logout(2);
-    dispatch(employerAuthActions.logout());
-    localStorage.removeItem("employer_jwt");
-    nav("/employer/login");
+    try {
+      await authApi.logout(2);
+    } finally {
+      dispatch(employerAuthActions.logout());
+      localStorage.removeItem("employer_jwt");
+      nav("/employer/login", { replace: true });
+    }
   };
 
   const getMe = async () => {
-    const res = await authApi.getMe(2);
-    dispatch(employerAuthActions.setUser(res));
+    try {
+      const res = await authApi.getMe(2);
+      dispatch(employerAuthActions.setUser(res));
+    } catch (error) {
+      dispatch(employerAuthActions.logout());
+      localStorage.removeItem("employer_jwt");
+      nav("/employer/login", { replace: true });
+    }
   };
 
   const handleChangePage = (url) => {
@@ -53,12 +120,22 @@ function Layout(props) {
 
   useEffect(() => {
     if (!localStorage.getItem("employer_jwt")) {
-      nav("/employer/login");
-    } else {
-      getMe();
+      nav("/employer/login", { replace: true });
+      return;
     }
+
+    getMe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!permissionsLoaded) return;
+
+    const routeVisible = menuItems.some((item) => item.path === activePath);
+    if (!routeVisible) {
+      nav("/employer", { replace: true });
+    }
+  }, [activePath, menuItems, nav, permissionsLoaded]);
 
   return (
     <div className="employer-shell">
@@ -80,7 +157,7 @@ function Layout(props) {
               <div className="employer-account__avatar">
                 <BsFillPersonFill />
               </div>
-              <span>{company?.name ? company.name : "Company Account"}</span>
+              <span>{company?.name || "Company Account"}</span>
             </div>
             <ul className="dropdown-menu">
               <li className="dropdown-item" onClick={handleLogout}>
@@ -104,47 +181,18 @@ function Layout(props) {
               </div>
             </div>
           </div>
-          <div
-            className={clsx("menu-part__item pointer", activePath === "/employer" && "is-active")}
-            onMouseMove={handleAmbientPointerMove}
-            onClick={() => handleChangePage("/employer")}
-          >
-            <AiTwotoneAppstore className="fs-5 me-1" />
-            Dashboard
-          </div>
-          <div
-            className={clsx(
-              "menu-part__item pointer",
-              activePath === "/employer/jobs" && "is-active"
-            )}
-            onMouseMove={handleAmbientPointerMove}
-            onClick={() => handleChangePage("/employer/jobs")}
-          >
-            <BsFillBriefcaseFill className="ts-lg me-1" />
-            Việc làm
-          </div>
-          <div
-            className={clsx(
-              "menu-part__item pointer",
-              activePath === "/employer/candidates" && "is-active"
-            )}
-            onMouseMove={handleAmbientPointerMove}
-            onClick={() => handleChangePage("/employer/candidates")}
-          >
-            <BsFillPeopleFill className="fs-5 me-1" />
-            Hồ sơ ứng tuyển
-          </div>
-          <div
-            className={clsx(
-              "menu-part__item pointer",
-              activePath === "/employer/candidate-search" && "is-active"
-            )}
-            onMouseMove={handleAmbientPointerMove}
-            onClick={() => handleChangePage("/employer/candidate-search")}
-          >
-            <BsSearch className="fs-5 me-1" />
-            Tìm ứng viên
-          </div>
+
+          {menuItems.map((item) => (
+            <div
+              key={item.path}
+              className={clsx("menu-part__item pointer", activePath === item.path && "is-active")}
+              onMouseMove={handleAmbientPointerMove}
+              onClick={() => handleChangePage(item.path)}
+            >
+              {item.icon}
+              {item.label}
+            </div>
+          ))}
         </div>
         <div className="content-part page-body">{props.children}</div>
       </div>
