@@ -2,17 +2,17 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Resume;
-use App\Models\Candidate;
 use Illuminate\Http\Request;
 use App\Models\Job;
 use App\Models\User;
 use App\Services\CompanyAccessService;
+use App\Services\CompanyDeletionService;
 use App\Services\EmployerBillingService;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
@@ -193,6 +193,22 @@ class JobController extends Controller
 
         return response()->json($job->fresh(['branch', 'industries', 'skills']));
     }
+
+    public function destroy(CompanyAccessService $access, CompanyDeletionService $deletion, $id)
+    {
+        $access->requirePermission('manage_jobs');
+        $job = $access->assertCanAccessJob((int) $id);
+        $before = $job->toArray();
+        $counts = $deletion->deleteJobs([$job->id]);
+
+        $access->log('job.deleted', Job::class, (int) $id, $before, $counts);
+
+        return response()->json([
+            'message' => 'Đã xóa tin tuyển dụng và dữ liệu ứng tuyển liên quan.',
+            'deleted' => $counts,
+        ]);
+    }
+
     public function getJobIndustries($id)
     {
         $res = Job::find($id)->industries;
@@ -223,43 +239,79 @@ class JobController extends Controller
     public function apply(Request $req)
     {
         $user = Auth::user();
+        $job = Job::with('employer:id,name')->findOrFail($req->id);
+
         $req->validate([
-            'cv' => 'required|file|mimes:pdf',
-            'resume_id' => 'nullable|integer',
+            'cv' => [Rule::requiredIf(!$req->boolean('use_latest_cv')), 'nullable', 'file', 'mimes:pdf'],
+            'use_latest_cv' => 'nullable|boolean',
         ]);
 
-        if ($req->resume_id) {
-            $resume = Resume::where([
-                ['id', '=', $req->resume_id],
-                ['candidate_id', '=', $user->id]
-            ])->first();
+        $path = null;
 
-            if ($resume === null) {
-                return response()->json(['message' => 'Resume not found'], 422);
+        if ($req->hasFile('cv')) {
+            $directory = storage_path('cv_images');
+            if (!File::exists($directory)) {
+                File::makeDirectory($directory, 0755, true);
+            }
+
+            $baseName = pathinfo($req->fname ?? 'cv', PATHINFO_FILENAME);
+            $safeBaseName = Str::slug($baseName, '_');
+            if ($safeBaseName === '') {
+                $safeBaseName = 'cv';
+            }
+
+            $fname = 'cand' . $user->id . '_' . time() . '_' . $safeBaseName . '.pdf';
+            $req->file('cv')->move($directory, $fname);
+            $path = rtrim(env('APP_URL'), '/') . '/cv_images/' . rawurlencode($fname);
+        } elseif ($req->boolean('use_latest_cv')) {
+            $path = DB::table('job_applying')
+                ->where('candidate_id', $user->id)
+                ->whereNotNull('cv_link')
+                ->where('cv_link', '<>', '')
+                ->orderByDesc('created_at')
+                ->value('cv_link');
+
+            if (!$path) {
+                return response()->json([
+                    'message' => 'Bạn chưa có CV PDF đã nộp trước đó. Vui lòng tải lên file PDF cho lần ứng tuyển đầu tiên.'
+                ], 422);
             }
         }
-
-        $directory = storage_path('cv_images');
-        if (!File::exists($directory)) {
-            File::makeDirectory($directory, 0755, true);
-        }
-
-        $baseName = pathinfo($req->fname ?? 'cv', PATHINFO_FILENAME);
-        $safeBaseName = Str::slug($baseName, '_');
-        if ($safeBaseName === '') {
-            $safeBaseName = 'cv';
-        }
-
-        $fname = 'cand' . $user->id . '_' . time() . '_' . $safeBaseName . '.pdf';
-        $req->file('cv')->move($directory, $fname);
-        $path = rtrim(env('APP_URL'), '/') . '/cv_images/' . rawurlencode($fname);
 
         DB::table('job_applying')->insert([
             'job_id' => $req->id,
             'candidate_id' => $user->id,
+            'resume_id' => null,
             'cv_link' => $path,
             'created_at' => Carbon::now()
         ]);
+
+        $companyName = optional($job->employer)->name ?: 'nhà tuyển dụng';
+        $messageTitle = 'Đã gửi đơn ứng tuyển';
+        $messageContent = "Bạn đã gửi đơn ứng tuyển vị trí {$job->jname} tới {$companyName}. Nhà tuyển dụng sẽ phản hồi trong mục thông báo khi có cập nhật.";
+
+        DB::table('candidate_messages')->insert([
+            'candidate_id' => $user->id,
+            'job_id' => $job->id,
+            'name' => 'Hồ sơ đã gửi',
+            'title' => $messageTitle,
+            'content' => $messageContent,
+            'isRead' => 0,
+            'created_at' => Carbon::now(),
+            'updated_at' => Carbon::now(),
+        ]);
+
+        app()->terminating(function () use ($user, $messageTitle, $messageContent) {
+            try {
+                if ($user?->email) {
+                    Mail::raw($messageContent, function ($mail) use ($user, $messageTitle) {
+                        $mail->to($user->email)->subject($messageTitle);
+                    });
+                }
+            } catch (\Throwable $exception) {
+                report($exception);
+            }
+        });
 
         return response()->json($path);
     }

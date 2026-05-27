@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\CompanyMember;
 use App\Models\User;
 use App\Services\CompanyAccessService;
+use App\Services\CompanyDeletionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -148,7 +149,7 @@ class CompanyMemberController extends Controller
         return response()->json($target);
     }
 
-    public function destroy(CompanyAccessService $access, $id)
+    public function destroy(CompanyAccessService $access, CompanyDeletionService $deletion, $id)
     {
         $target = CompanyMember::with('user')->findOrFail($id);
         $access->requirePermission('lock_members');
@@ -160,15 +161,13 @@ class CompanyMemberController extends Controller
         }
 
         $before = $target->toArray();
-        $target->status = 'inactive';
-        $target->save();
-        if ($target->user) {
-            $target->user->is_active = 0;
-            $target->user->save();
-        }
+        $counts = $deletion->deleteMember($target);
 
-        $access->log('company_member.deactivated', CompanyMember::class, $target->id, $before, $target->fresh()->toArray());
+        $access->log('company_member.deleted', CompanyMember::class, (int) $id, $before, $counts);
 
-        return response()->json(['message' => 'Đã vô hiệu hóa tài khoản HR.']);
+        return response()->json([
+            'message' => 'Đã xóa tài khoản khỏi công ty.',
+            'deleted' => $counts,
+        ]);
     }
 }

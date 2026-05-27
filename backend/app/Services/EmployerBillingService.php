@@ -135,7 +135,7 @@ class EmployerBillingService
         $subscription->increment('job_posts_used');
     }
 
-    public function createPayOSCheckout(Employer $employer, string $planKey): EmployerPayment
+    public function createPayOSCheckout(Employer $employer, string $planKey, array $options = []): EmployerPayment
     {
         $plan = $this->plan($planKey);
         $this->assertPlanCanBePurchased($employer, $planKey);
@@ -146,8 +146,11 @@ class EmployerBillingService
 
         $orderCode = $this->createUniqueOrderCode();
         $description = 'RW' . substr((string) $orderCode, -7);
-        $returnUrl = $this->frontendUrl('/employer/billing');
-        $cancelUrl = $this->frontendUrl('/employer/billing');
+        $source = $options['source'] ?? 'web';
+        $mobileReturnUrl = env('MOBILE_PAYMENT_RETURN_URL', 'recruitmentstudio://employer/billing?status=success');
+        $mobileCancelUrl = env('MOBILE_PAYMENT_CANCEL_URL', 'recruitmentstudio://employer/billing?status=cancelled');
+        $returnUrl = $options['return_url'] ?: ($source === 'mobile' ? $mobileReturnUrl : $this->frontendUrl('/employer/billing'));
+        $cancelUrl = $options['cancel_url'] ?: ($source === 'mobile' ? $mobileCancelUrl : $this->frontendUrl('/employer/billing'));
 
         $payment = EmployerPayment::create([
             'employer_id' => $employer->id,

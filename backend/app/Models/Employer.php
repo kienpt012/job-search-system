@@ -9,6 +9,10 @@ class Employer extends Model
 {
     use HasFactory;
 
+    public $incrementing = false;
+
+    protected $keyType = 'int';
+
     protected $guarded = [];
 
     public function jobs()

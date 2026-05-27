@@ -1,7 +1,7 @@
 import "./job.css";
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { AiFillHeart, AiOutlineHeart, AiOutlinePlus } from "react-icons/ai";
+import { AiFillHeart, AiOutlineHeart } from "react-icons/ai";
 import {
   BsBoxArrowUpRight,
   BsCalendar2Check,
@@ -18,11 +18,8 @@ import {
 } from "react-icons/bs";
 import { FaIndustry } from "react-icons/fa";
 import { useSelector } from "react-redux";
-import { jsPDF } from "jspdf";
-import html2canvas from "html2canvas";
 import jobApi from "../../api/job";
 import candidateApi from "../../api/candidate";
-import resumeApi from "../../api/resume";
 import { MdOutlineAttachMoney } from "react-icons/md";
 import { IoMdPeople } from "react-icons/io";
 import dayjs from "dayjs";
@@ -77,10 +74,9 @@ const APPLY_MODAL_TEXT = {
   candidateInfo: "Th\u00f4ng tin \u1ee9ng vi\u00ean",
   fullName: "H\u1ecd v\u00e0 t\u00ean",
   email: "Email",
-  resumeLabel: "H\u1ed3 s\u01a1 c\u1ee7a b\u1ea1n",
-  createResume: "T\u1ea1o h\u1ed3 s\u01a1 tr\u1ef1c tuy\u1ebfn",
-  uploadResume: "T\u1ea3i l\u00ean h\u1ed3 s\u01a1 c\u00f3 s\u1eb5n",
-  manageResume: "Qu\u1ea3n l\u00fd / t\u1ea1o th\u00eam h\u1ed3 s\u01a1",
+  resumeLabel: "CV PDF của bạn",
+  uploadResume: "Tải lên CV PDF",
+  reuseLatest: "Dùng lại CV đã nộp gần nhất",
   submit: "N\u1ed9p h\u1ed3 s\u01a1",
   submitting: "\u0110ang n\u1ed9p...",
   close: "\u0110\u00f3ng",
@@ -94,18 +90,8 @@ const APPLY_MODAL_TEXT = {
   ],
   resumeTipTitle: "M\u1eb9o CV",
   resumeTip:
-    "Ch\u1ecdn CV li\u00ean quan nh\u1ea5t v\u1edbi v\u1ecb tr\u00ed n\u00e0y, \u01b0u ti\u00ean k\u1ef9 n\u0103ng v\u00e0 kinh nghi\u1ec7m c\u00f3 trong m\u00f4 t\u1ea3 c\u00f4ng vi\u1ec7c.",
+    "Lần đầu hãy tải CV PDF rõ ràng, dung lượng nhẹ. Từ lần sau có thể dùng lại CV PDF đã nộp gần nhất.",
 };
-
-const escapeHtml = (value = "") =>
-  String(value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-
-const formatMultiline = (value = "") => escapeHtml(value).replace(/\n/g, "<br />");
 
 const sanitizeFileName = (value = "cv") => {
   const normalized = value
@@ -118,9 +104,6 @@ const sanitizeFileName = (value = "cv") => {
   return normalized || "cv";
 };
 
-const formatMonthYear = (value, fallback = "Hiện tại") =>
-  value ? dayjs(value).format("MM/YYYY") : fallback;
-
 const isPdfFile = (selectedFile) => {
   if (!selectedFile) {
     return false;
@@ -130,283 +113,6 @@ const isPdfFile = (selectedFile) => {
     selectedFile.type === "application/pdf" ||
     selectedFile.name.toLowerCase().endsWith(".pdf")
   );
-};
-
-const buildResumeSection = (title, content) => {
-  if (!content) {
-    return "";
-  }
-
-  return `
-    <section style="margin-top: 24px;">
-      <h2 style="margin: 0 0 12px; font-size: 18px; color: #0f766e; border-bottom: 1px solid #d1d5db; padding-bottom: 8px;">
-        ${escapeHtml(title)}
-      </h2>
-      ${content}
-    </section>
-  `;
-};
-
-const buildResumePdfMarkup = (resumeData) => {
-  const basicInfor = resumeData?.basicInfor || {};
-  const fullName =
-    basicInfor.fullname ||
-    [basicInfor.lastname, basicInfor.firstname].filter(Boolean).join(" ") ||
-    "Ứng viên";
-
-  const contactItems = [
-    basicInfor.phone,
-    basicInfor.email,
-    basicInfor.address,
-    basicInfor.link,
-  ]
-    .filter(Boolean)
-    .map((item) => escapeHtml(item));
-
-  const buildSimpleList = (items, renderer) => {
-    const filteredItems = Array.isArray(items) ? items.filter(Boolean) : [];
-    if (filteredItems.length === 0) {
-      return "";
-    }
-
-    return filteredItems
-      .map(
-        (item) => `
-          <div style="margin-bottom: 14px;">
-            ${renderer(item)}
-          </div>
-        `
-      )
-      .join("");
-  };
-
-  const objectiveSection = basicInfor.objective
-    ? `<p style="margin: 0; font-size: 14px; line-height: 1.6;">${formatMultiline(
-        basicInfor.objective
-      )}</p>`
-    : "";
-
-  const educationSection = buildSimpleList(resumeData?.educations, (item) => {
-    const dateRange = `${formatMonthYear(item.start_date, "")}${
-      item.start_date || item.end_date ? " - " : ""
-    }${formatMonthYear(item.end_date)}`.trim();
-
-    return `
-      <div style="font-weight: 700; font-size: 15px;">${escapeHtml(
-        item.school || "Học vấn"
-      )}</div>
-      <div style="font-size: 14px; color: #374151; margin-top: 2px;">
-        ${escapeHtml(item.major || "")}
-      </div>
-      <div style="font-size: 13px; color: #6b7280; margin-top: 2px;">
-        ${escapeHtml(dateRange)}
-      </div>
-      ${
-        item.description
-          ? `<div style="font-size: 14px; margin-top: 6px; line-height: 1.6;">${formatMultiline(
-              item.description
-            )}</div>`
-          : ""
-      }
-    `;
-  });
-
-  const experienceSection = buildSimpleList(resumeData?.experiences, (item) => {
-    const dateRange = `${formatMonthYear(item.start_date, "")}${
-      item.start_date || item.end_date ? " - " : ""
-    }${formatMonthYear(item.end_date)}`.trim();
-
-    return `
-      <div style="font-weight: 700; font-size: 15px;">${escapeHtml(
-        item.name || "Kinh nghiệm"
-      )}</div>
-      <div style="font-size: 14px; color: #374151; margin-top: 2px;">
-        ${escapeHtml(item.company || "")}
-      </div>
-      <div style="font-size: 13px; color: #6b7280; margin-top: 2px;">
-        ${escapeHtml(dateRange)}
-      </div>
-      ${
-        item.description
-          ? `<div style="font-size: 14px; margin-top: 6px; line-height: 1.6;">${formatMultiline(
-              item.description
-            )}</div>`
-          : ""
-      }
-    `;
-  });
-
-  const projectSection = buildSimpleList(resumeData?.projects, (item) => {
-    const metaParts = [item.role, item.prj_type, item.technologies, item.link].filter(Boolean);
-    const dateRange = `${formatMonthYear(item.start_date, "")}${
-      item.start_date || item.end_date ? " - " : ""
-    }${formatMonthYear(item.end_date)}`.trim();
-
-    return `
-      <div style="font-weight: 700; font-size: 15px;">${escapeHtml(
-        item.name || "Dự án"
-      )}</div>
-      ${
-        metaParts.length > 0
-          ? `<div style="font-size: 14px; color: #374151; margin-top: 2px;">
-              ${escapeHtml(metaParts.join(" | "))}
-            </div>`
-          : ""
-      }
-      <div style="font-size: 13px; color: #6b7280; margin-top: 2px;">
-        ${escapeHtml(dateRange)}
-      </div>
-      ${
-        item.description
-          ? `<div style="font-size: 14px; margin-top: 6px; line-height: 1.6;">${formatMultiline(
-              item.description
-            )}</div>`
-          : ""
-      }
-    `;
-  });
-
-  const skillSection = buildSimpleList(resumeData?.skills, (item) => {
-    const description = item.description ? `: ${item.description}` : "";
-    return `<div style="font-size: 14px; line-height: 1.6;">• ${escapeHtml(
-      `${item.name || "Kỹ năng"}${description}`
-    )}</div>`;
-  });
-
-  const certificateSection = buildSimpleList(
-    resumeData?.certificates,
-    (item) => `
-      <div style="font-size: 14px; line-height: 1.6;">
-        • ${escapeHtml(item.name || "Chứng chỉ")}
-        ${item.receive_date ? ` (${escapeHtml(dayjs(item.receive_date).format("MM/YYYY"))})` : ""}
-      </div>
-    `
-  );
-
-  const prizeSection = buildSimpleList(
-    resumeData?.prizes,
-    (item) => `
-      <div style="font-size: 14px; line-height: 1.6;">
-        • ${escapeHtml(item.name || "Giải thưởng")}
-        ${item.receive_date ? ` (${escapeHtml(dayjs(item.receive_date).format("MM/YYYY"))})` : ""}
-      </div>
-    `
-  );
-
-  const activitySection = buildSimpleList(resumeData?.activities, (item) => {
-    const metaParts = [item.organization, item.role, item.link].filter(Boolean);
-    const dateRange = `${formatMonthYear(item.start_date, "")}${
-      item.start_date || item.end_date ? " - " : ""
-    }${formatMonthYear(item.end_date)}`.trim();
-
-    return `
-      <div style="font-weight: 700; font-size: 15px;">${escapeHtml(
-        item.name || "Hoạt động"
-      )}</div>
-      ${
-        metaParts.length > 0
-          ? `<div style="font-size: 14px; color: #374151; margin-top: 2px;">
-              ${escapeHtml(metaParts.join(" | "))}
-            </div>`
-          : ""
-      }
-      <div style="font-size: 13px; color: #6b7280; margin-top: 2px;">
-        ${escapeHtml(dateRange)}
-      </div>
-      ${
-        item.description
-          ? `<div style="font-size: 14px; margin-top: 6px; line-height: 1.6;">${formatMultiline(
-              item.description
-            )}</div>`
-          : ""
-      }
-    `;
-  });
-
-  const otherSection = buildSimpleList(
-    resumeData?.others,
-    (item) => `
-      <div style="font-size: 14px; line-height: 1.6;">
-        <strong>${escapeHtml(item.name || "Khác")}:</strong>
-        ${formatMultiline(item.description || "")}
-      </div>
-    `
-  );
-
-  return `
-    <div style="width: 794px; background: #ffffff; color: #111827; padding: 40px 48px; font-family: Arial, sans-serif; box-sizing: border-box;">
-      <header style="border-bottom: 2px solid #0f766e; padding-bottom: 16px;">
-        <div style="font-size: 28px; font-weight: 700; line-height: 1.3;">
-          ${escapeHtml(basicInfor.title || "Hồ sơ ứng tuyển")}
-        </div>
-        <div style="font-size: 24px; font-weight: 700; margin-top: 10px;">
-          ${escapeHtml(fullName)}
-        </div>
-        ${
-          contactItems.length > 0
-            ? `<div style="font-size: 14px; color: #374151; margin-top: 10px; line-height: 1.6;">
-                ${contactItems.join(" | ")}
-              </div>`
-            : ""
-        }
-      </header>
-
-      ${buildResumeSection("Mục tiêu nghề nghiệp", objectiveSection)}
-      ${buildResumeSection("Học vấn", educationSection)}
-      ${buildResumeSection("Kinh nghiệm", experienceSection)}
-      ${buildResumeSection("Dự án", projectSection)}
-      ${buildResumeSection("Kỹ năng", skillSection)}
-      ${buildResumeSection("Chứng chỉ", certificateSection)}
-      ${buildResumeSection("Giải thưởng", prizeSection)}
-      ${buildResumeSection("Hoạt động", activitySection)}
-      ${buildResumeSection("Khác", otherSection)}
-    </div>
-  `;
-};
-
-const createPdfFileFromResume = async (resumeData, fallbackTitle) => {
-  const tempElement = document.createElement("div");
-  tempElement.style.position = "fixed";
-  tempElement.style.left = "-10000px";
-  tempElement.style.top = "0";
-  tempElement.style.zIndex = "-1";
-  tempElement.style.background = "#ffffff";
-  tempElement.innerHTML = buildResumePdfMarkup(resumeData);
-  document.body.appendChild(tempElement);
-
-  try {
-    const canvas = await html2canvas(tempElement, {
-      scale: 1,
-      backgroundColor: "#ffffff",
-      useCORS: true,
-    });
-    const imageData = canvas.toDataURL("image/jpeg", 0.82);
-    const pdf = new jsPDF("p", "mm", "a4");
-    const pdfWidth = pdf.internal.pageSize.getWidth();
-    const pdfHeight = pdf.internal.pageSize.getHeight();
-    const imageHeight = (canvas.height * pdfWidth) / canvas.width;
-    let remainingHeight = imageHeight;
-    let position = 0;
-
-    pdf.addImage(imageData, "JPEG", 0, position, pdfWidth, imageHeight);
-    remainingHeight -= pdfHeight;
-
-    while (remainingHeight > 0) {
-      position = remainingHeight - imageHeight;
-      pdf.addPage();
-      pdf.addImage(imageData, "JPEG", 0, position, pdfWidth, imageHeight);
-      remainingHeight -= pdfHeight;
-    }
-
-    const pdfBlob = pdf.output("blob");
-    const fileName = `${sanitizeFileName(
-      resumeData?.basicInfor?.title || fallbackTitle || "cv_online"
-    )}.pdf`;
-
-    return new File([pdfBlob], fileName, { type: "application/pdf" });
-  } finally {
-    document.body.removeChild(tempElement);
-  }
 };
 
 function Job() {
@@ -421,12 +127,10 @@ function Job() {
   const user = useSelector((state) => state.candAuth.current);
   const isAuth = useSelector((state) => state.candAuth.isAuth);
   const [isApplied, setIsApplied] = useState(false);
-  const [isUpload, setIsUpload] = useState(false);
+  const [useLatestCv, setUseLatestCv] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
   const [file, setFile] = useState();
-  const [resumes, setResumes] = useState([]);
-  const [selectedResumeId, setSelectedResumeId] = useState(null);
   const [industries, setIndustries] = useState([]);
   const [showCompanyMap, setShowCompanyMap] = useState(false);
   const candidateFullName =
@@ -443,30 +147,17 @@ function Job() {
     setIsApplied(res.value);
   };
 
-  const getResumes = async () => {
-    const res = await resumeApi.getByCurrentCandidate();
-    setResumes(res);
-    if (res.length > 0) {
-      setSelectedResumeId((currentResumeId) => {
-        if (res.some((item) => item.id === currentResumeId)) {
-          return currentResumeId;
-        }
-        return res[0].id;
-      });
-    } else {
-      setSelectedResumeId(null);
-    }
-  };
-
   const handleApply = async () => {
     const formData = new FormData();
 
     try {
       setIsApplying(true);
 
-      if (isUpload) {
+      if (useLatestCv) {
+        formData.append("use_latest_cv", "1");
+      } else {
         if (!file) {
-          alert("Vui lòng chọn hồ sơ tải lên!");
+          alert("Vui lòng chọn file CV PDF hoặc dùng lại CV đã nộp gần nhất!");
           return;
         }
 
@@ -477,25 +168,6 @@ function Job() {
 
         formData.append("cv", file);
         formData.append("fname", `${sanitizeFileName(file.name.replace(/\.pdf$/i, ""))}.pdf`);
-      } else {
-        const selectedResume = resumes.find(
-          (item) => item.id === Number(selectedResumeId)
-        );
-
-        if (!selectedResume) {
-          alert("Vui lòng chọn hồ sơ để ứng tuyển!");
-          return;
-        }
-
-        const resumeDetail = await resumeApi.getById(selectedResume.id);
-        const generatedPdfFile = await createPdfFileFromResume(
-          resumeDetail,
-          selectedResume.title
-        );
-
-        formData.append("resume_id", selectedResume.id);
-        formData.append("cv", generatedPdfFile);
-        formData.append("fname", generatedPdfFile.name);
       }
 
       await jobApi.apply(id, formData);
@@ -505,7 +177,7 @@ function Job() {
       const status = error?.response?.status;
 
       if (status === 413) {
-        alert("Hồ sơ quá lớn nên server từ chối nhận. Vui lòng thử tải lên file PDF nhẹ hơn hoặc rút gọn hồ sơ online.");
+        alert("CV quá lớn nên server từ chối nhận. Vui lòng tải lên file PDF nhẹ hơn.");
       } else {
         alert(error?.response?.data?.message || "Không thể nộp hồ sơ. Vui lòng thử lại.");
       }
@@ -588,7 +260,6 @@ function Job() {
     if (isAuth) {
       checkApplying();
       checkJobSaved();
-      getResumes();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuth]);
@@ -643,9 +314,8 @@ function Job() {
             disabled={isApplied === true}
             onClick={() => {
               if (isAuth) {
-                setIsUpload(false);
+                setUseLatestCv(false);
                 setFile(undefined);
-                getResumes();
               } else {
                 checkLoggedIn();
               }
@@ -837,9 +507,8 @@ function Job() {
           disabled={isApplied === true}
           onClick={() => {
             if (isAuth) {
-              setIsUpload(false);
+              setUseLatestCv(false);
               setFile(undefined);
-              getResumes();
             } else {
               checkLoggedIn();
             }
@@ -882,9 +551,8 @@ function Job() {
                       disabled={isApplied === true}
                       onClick={() => {
                         if (isAuth) {
-                          setIsUpload(false);
+                          setUseLatestCv(false);
                           setFile(undefined);
-                          getResumes();
                         } else {
                           checkLoggedIn();
                         }
@@ -1134,95 +802,65 @@ function Job() {
                   </div>
                 </form>
                 <div className="job-apply-resumes">
-                  Hồ sơ của bạn:
+                  {APPLY_MODAL_TEXT.resumeLabel}:
                   <div>
-                    {resumes.length > 0 && !isUpload && (
-                      <div className="mt-2 w-50">
-                        {resumes.map((item) => (
-                          <label
-                            key={`resume-option-${item.id}`}
-                            className="form-check border rounded px-3 py-2 mb-2 d-flex align-items-center gap-2"
-                            style={{ cursor: "pointer" }}
-                          >
-                            <input
-                              className="form-check-input mt-0"
-                              type="radio"
-                              name="selected_resume"
-                              checked={Number(selectedResumeId) === item.id}
-                              onChange={() => {
-                                setSelectedResumeId(item.id);
-                                setFile(undefined);
-                              }}
-                            />
-                            <span>{item.title}</span>
-                          </label>
-                        ))}
-                      </div>
-                    )}
-                    {resumes.length === 0 && !isUpload && (
-                      <button
-                        type="button"
-                        className="btn btn-outline-primary mt-2 w-50"
-                        onClick={() => {
-                          document.getElementById("close-dialog-btn").click();
-                          nav("/candidate/resumes");
-                        }}
+                    <div className="mt-2 d-flex flex-column gap-2">
+                      <label
+                        className="form-check border rounded px-3 py-2 d-flex align-items-center gap-2"
+                        style={{ cursor: "pointer" }}
                       >
-                        <AiOutlinePlus /> Tạo hồ sơ trực tuyến
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      className="btn btn-outline-primary mt-3 w-50"
-                      onClick={() => {
-                        setIsUpload((currentValue) => {
-                          const nextValue = !currentValue;
-                          if (nextValue) {
-                            setSelectedResumeId(null);
-                          } else if (resumes.length > 0) {
-                            setSelectedResumeId(resumes[0].id);
-                          }
-                          setFile(undefined);
-                          return nextValue;
-                        });
-                      }}
-                    >
-                      <BsUpload /> Tải lên hồ sơ có sẵn
-                    </button>
-                    {resumes.length > 0 && (
-                      <>
-                        <br />
-                        <button
-                          type="button"
-                          className="btn btn-outline-secondary mt-3 w-50"
-                          onClick={() => {
-                            document.getElementById("close-dialog-btn").click();
-                            nav("/candidate/resumes");
-                          }}
-                        >
-                          <AiOutlinePlus /> Quản lý / tạo thêm hồ sơ
-                        </button>
-                      </>
-                    )}
-                    {isUpload && (
-                      <div>
                         <input
-                          type="file"
-                          accept=".pdf,application/pdf"
-                          className="form-control mt-3 w-50"
-                          onChange={(e) => {
-                            const selectedFile = e.target.files[0];
-
-                            if (selectedFile && !isPdfFile(selectedFile)) {
-                              alert("Chỉ hỗ trợ chọn file PDF!");
-                              e.target.value = "";
-                              setFile(undefined);
-                              return;
-                            }
-
-                            setFile(selectedFile);
+                          className="form-check-input mt-0"
+                          type="radio"
+                          name="apply_cv_mode"
+                          checked={!useLatestCv}
+                          onChange={() => {
+                            setUseLatestCv(false);
                           }}
                         />
+                        <span>
+                          <BsUpload /> {APPLY_MODAL_TEXT.uploadResume}
+                        </span>
+                      </label>
+                      <label
+                        className="form-check border rounded px-3 py-2 d-flex align-items-center gap-2"
+                        style={{ cursor: "pointer" }}
+                      >
+                        <input
+                          className="form-check-input mt-0"
+                          type="radio"
+                          name="apply_cv_mode"
+                          checked={useLatestCv}
+                          onChange={() => {
+                            setUseLatestCv(true);
+                            setFile(undefined);
+                          }}
+                        />
+                        <span>{APPLY_MODAL_TEXT.reuseLatest}</span>
+                      </label>
+                    </div>
+                    {!useLatestCv && (
+                      <input
+                        type="file"
+                        accept=".pdf,application/pdf"
+                        className="form-control mt-3"
+                        onChange={(e) => {
+                          const selectedFile = e.target.files[0];
+
+                          if (selectedFile && !isPdfFile(selectedFile)) {
+                            alert("Chỉ hỗ trợ chọn file PDF!");
+                            e.target.value = "";
+                            setFile(undefined);
+                            return;
+                          }
+
+                          setFile(selectedFile);
+                        }}
+                      />
+                    )}
+                    {useLatestCv && (
+                      <div className="alert alert-info mt-3 mb-0">
+                        Hệ thống sẽ lấy CV PDF bạn đã nộp gần nhất. Nếu đây là lần đầu ứng tuyển, hãy chọn tải lên PDF.
                       </div>
                     )}
                   </div>
@@ -1246,7 +884,7 @@ function Job() {
                 <button
                   type="button"
                   className="btn app-button-primary"
-                  disabled={isApplying}
+                  disabled={isApplying || (!useLatestCv && !file)}
                   onClick={handleApply}
                 >
                   {isApplying ? "Đang nộp..." : "Nộp hồ sơ"}

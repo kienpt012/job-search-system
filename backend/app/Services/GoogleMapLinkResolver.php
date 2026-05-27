@@ -13,7 +13,11 @@ class GoogleMapLinkResolver
 
         $localCoordinates = $this->extractCoordinates($url);
         if ($localCoordinates) {
-            return array_merge($localCoordinates, ['resolved_url' => $url]);
+            return array_merge(
+                $localCoordinates,
+                ['resolved_url' => $url],
+                $this->reverseGeocode($localCoordinates['lat'], $localCoordinates['lng'])
+            );
         }
 
         $response = $this->followRedirects($url);
@@ -24,9 +28,15 @@ class GoogleMapLinkResolver
         [$finalUrl, $body] = $response;
         $coordinates = $this->extractCoordinates($finalUrl, $body);
 
-        return $coordinates
-            ? array_merge($coordinates, ['resolved_url' => $finalUrl])
-            : null;
+        if (!$coordinates) {
+            return null;
+        }
+
+        return array_merge(
+            $coordinates,
+            ['resolved_url' => $finalUrl],
+            $this->reverseGeocode($coordinates['lat'], $coordinates['lng'])
+        );
     }
 
     public function extractCoordinates(string $url, string $body = ''): ?array
@@ -177,5 +187,45 @@ class GoogleMapLinkResolver
             'lat' => $lat,
             'lng' => $lng,
         ];
+    }
+
+    private function reverseGeocode(float $lat, float $lng): array
+    {
+        $url = sprintf(
+            'https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=%F&lon=%F&zoom=18&addressdetails=1&accept-language=vi',
+            $lat,
+            $lng
+        );
+
+        $context = stream_context_create([
+            'http' => [
+                'method' => 'GET',
+                'header' => [
+                    'User-Agent: RecruitmentStudio/1.0 (local development)',
+                    'Accept: application/json',
+                ],
+                'timeout' => 8,
+                'ignore_errors' => true,
+            ],
+        ]);
+
+        $body = @file_get_contents($url, false, $context);
+        if ($body === false) {
+            return [];
+        }
+
+        $payload = json_decode($body, true);
+        if (!is_array($payload)) {
+            return [];
+        }
+
+        $address = $payload['address'] ?? [];
+
+        return array_filter([
+            'address' => $payload['display_name'] ?? null,
+            'province' => $address['city'] ?? $address['province'] ?? $address['state'] ?? null,
+            'district' => $address['city_district'] ?? $address['district'] ?? $address['county'] ?? null,
+            'ward' => $address['suburb'] ?? $address['quarter'] ?? $address['village'] ?? null,
+        ], fn ($value) => $value !== null && $value !== '');
     }
 }

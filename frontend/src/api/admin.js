@@ -13,6 +13,15 @@ const adminApi = {
   updateSkill: (id, params) => adminAxios.patch(`/jskills/${id}`, params),
   deleteSkill: (id) => adminAxios.delete(`/jskills/${id}`),
   resolveSharedMapLink: (params) => adminAxios.post("/admin/resolveSharedMapLink", params),
+  getCompanyDetail: (id) => adminAxios.get(`/admin/companies/${id}`),
+  getCompanyBranches: (id) => adminAxios.get(`/admin/companies/${id}/branches`),
+  createCompanyBranch: (id, params) => adminAxios.post(`/admin/companies/${id}/branches`, params),
+  updateCompanyBranch: (id, params) => adminAxios.patch(`/admin/branches/${id}`, params),
+  deleteCompanyBranch: (id) => adminAxios.delete(`/admin/branches/${id}`),
+  getCompanyMembers: (id) => adminAxios.get(`/admin/companies/${id}/members`),
+  createCompanyMember: (id, params) => adminAxios.post(`/admin/companies/${id}/members`, params),
+  updateCompanyMember: (id, params) => adminAxios.patch(`/admin/members/${id}`, params),
+  deleteCompanyMember: (id) => adminAxios.delete(`/admin/members/${id}`),
   getJobs: (params = {}) => {
     const searchParams = new URLSearchParams();
     if (params.company_id) {
@@ -26,11 +35,13 @@ const adminApi = {
     return adminAxios.get(`/admin/jobs${query ? `?${query}` : ""}`);
   },
   updateJob: (id, params) => adminAxios.post(`/admin/jobs/${id}/update`, params),
+  deleteJob: (id) => adminAxios.delete(`/admin/jobs/${id}`),
   createCompany: (params) => adminAxios.post("/admin/companies", params),
   updateCompany: (id, params) => adminAxios.post(`/admin/companies/${id}/update`, params),
   deleteCompany: (id) => adminAxios.delete(`/admin/companies/${id}`),
   updateUserStatus: (id, params) => adminAxios.post(`/admin/users/${id}/status`, params),
   updateUserPassword: (id, params) => adminAxios.post(`/admin/users/${id}/password`, params),
+  impersonateUser: (id) => adminAxios.post(`/admin/users/${id}/impersonate`),
   deleteUser: (id) => adminAxios.delete(`/admin/users/${id}`),
   getEmployerRegistrations: () => adminAxios.get("/employer-registrations"),
   approveEmployerRegistration: (id, params = {}) =>

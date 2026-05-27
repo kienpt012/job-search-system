@@ -649,9 +649,18 @@ class EmployerController extends Controller
         ]);
 
         $candidate = Candidate::find($req->candidate_id);
-        if ($req->boolean('is_send_mail') && $candidate?->email) {
-            Mail::raw($req->content, function ($message) use ($candidate, $req) {
-                $message->to($candidate->email)->subject($req->title);
+        $candidateEmail = $candidate?->email;
+        if ($req->boolean('is_send_mail') && $candidateEmail) {
+            $mailTitle = (string) $req->title;
+            $mailContent = (string) $req->content;
+            app()->terminating(function () use ($candidateEmail, $mailTitle, $mailContent) {
+                try {
+                    Mail::raw($mailContent, function ($message) use ($candidateEmail, $mailTitle) {
+                        $message->to($candidateEmail)->subject($mailTitle);
+                    });
+                } catch (\Throwable $error) {
+                    report($error);
+                }
             });
         }
 
@@ -671,9 +680,22 @@ class EmployerController extends Controller
         $currentTime = Carbon::now()->format('H:i d/m/Y');
         $job = $access->assertCanAccessJob((int) $req->job_id);
         $company = Employer::where('id', '=', $job->employer_id)->value('name');
+        $application = DB::table('job_applying')
+            ->where([
+                ['job_id', '=', $req->job_id],
+                ['candidate_id', '=', $req->candidate_id]
+            ])
+            ->whereIn('job_id', [$job->id])
+            ->first();
+
+        if (!$application) {
+            return response()->json(['message' => 'Application not found'], 404);
+        }
 
         if ($req->actType === 'VIEWED') {
-            $nextStatus = 'BROWSING_RESUME';
+            $nextStatus = $application->status === 'WAITING'
+                ? 'BROWSING_RESUME'
+                : $application->status;
             $msgName = 'Hồ sơ đã được xem, vị trí ';
         } elseif ($req->actType === 'ACCEPT') {
             if ($req->step === 'step1') {
@@ -694,38 +716,62 @@ class EmployerController extends Controller
         }
 
         $msgName = $msgName . $req->jname . ', ' . $company . ', lúc ' . $currentTime;
+        $messageTitle = trim((string) $req->title);
+        if ($messageTitle === '') {
+            $messageTitle = $req->actType === 'ACCEPT'
+                ? 'Thông báo hồ sơ phù hợp'
+                : 'Thông báo kết quả ứng tuyển';
+        }
 
-        DB::table('job_applying')
-            ->where([
-                ['job_id', '=', $req->job_id],
-                ['candidate_id', '=', $req->candidate_id]
-            ])
-            ->whereIn('job_id', [$job->id])
-            ->update([
-                'status' => $nextStatus,
-                'updated_at' => Carbon::now(),
-            ]);
+        $messageContent = trim((string) $req->content);
+        if ($messageContent === '') {
+            $candidateName = trim(($req->lastname ?? '') . ' ' . ($req->firstname ?? ''));
+            if ($candidateName === '') {
+                $candidateName = 'ứng viên';
+            }
+            $jobName = $req->jname ?: 'vị trí đã ứng tuyển';
+            if ($req->actType === 'ACCEPT') {
+                $messageContent = $req->step === 'step2'
+                    ? "Xin chào {$candidateName},\n\nChúc mừng bạn đã vượt qua vòng phỏng vấn cho vị trí {$jobName}. Nhà tuyển dụng sẽ tiếp tục liên hệ để trao đổi bước tiếp theo.\n\nTrân trọng,"
+                    : "Xin chào {$candidateName},\n\nHồ sơ của bạn phù hợp với vị trí {$jobName}. Nhà tuyển dụng sẽ liên hệ để trao đổi lịch phỏng vấn và các thông tin tiếp theo.\n\nTrân trọng,";
+            } else {
+                $messageContent = $req->step === 'step2'
+                    ? "Xin chào {$candidateName},\n\nCảm ơn bạn đã tham gia phỏng vấn vị trí {$jobName}. Hiện tại hồ sơ của bạn chưa phù hợp với nhu cầu tuyển dụng ở giai đoạn này.\n\nChúc bạn sớm tìm được cơ hội phù hợp."
+                    : "Xin chào {$candidateName},\n\nCảm ơn bạn đã quan tâm và ứng tuyển vị trí {$jobName}. Hiện tại hồ sơ của bạn chưa phù hợp với yêu cầu tuyển dụng ở giai đoạn này.\n\nChúc bạn sớm tìm được cơ hội phù hợp.";
+            }
+        }
+
+        if ($nextStatus !== $application->status || $req->actType !== 'VIEWED') {
+            DB::table('job_applying')
+                ->where([
+                    ['job_id', '=', $req->job_id],
+                    ['candidate_id', '=', $req->candidate_id]
+                ])
+                ->whereIn('job_id', [$job->id])
+                ->update([
+                    'status' => $nextStatus,
+                    'updated_at' => Carbon::now(),
+                ]);
+        }
 
         if ($req->actType !== 'VIEWED') {
             CandidateMessage::create([
                 'candidate_id' => $req->candidate_id,
                 'job_id' => $job->id,
                 'name' => $msgName,
-                'title' => $req->title,
-                'content' => $req->content,
+                'title' => $messageTitle,
+                'content' => $messageContent,
             ]);
         }
 
         if ($req->boolean('is_send_mail') && $req->actType !== 'VIEWED' && !empty($req->email)) {
-            $safeTitle = e($req->title);
+            $safeTitle = e($messageTitle);
             $safeCandidateName = e(trim(($req->lastname ?? '') . ' ' . ($req->firstname ?? '')));
             $safeCompany = e($company);
             $safeJobName = e($req->jname);
-            $safeContent = nl2br(e($req->content));
+            $safeContent = nl2br(e($messageContent));
             $safeCurrentTime = e($currentTime);
-
-            Mail::html(
-                "
+            $mailHtml = "
                 <div style=\"font-family:Arial,Helvetica,sans-serif;line-height:1.6;color:#1f2937;\">
                     <h2 style=\"margin-bottom:16px;\">{$safeTitle}</h2>
                     <p>Xin chào {$safeCandidateName},</p>
@@ -736,12 +782,19 @@ class EmployerController extends Controller
                     <p>Thời gian phản hồi: {$safeCurrentTime}</p>
                     <p>Trân trọng,<br>{$safeCompany}</p>
                 </div>
-                ",
-                function ($message) use ($req) {
-                    $message->to($req->email)
-                        ->subject($req->title);
+                ";
+            $mailTo = (string) $req->email;
+            $mailSubject = $messageTitle;
+
+            app()->terminating(function () use ($mailHtml, $mailTo, $mailSubject) {
+                try {
+                    Mail::html($mailHtml, function ($message) use ($mailTo, $mailSubject) {
+                        $message->to($mailTo)->subject($mailSubject);
+                    });
+                } catch (\Throwable $error) {
+                    report($error);
                 }
-            );
+            });
         }
 
         event(new NotifyCandidateEvent($msgName, $req->candidate_id));
@@ -750,7 +803,10 @@ class EmployerController extends Controller
             'status' => $nextStatus,
         ]);
 
-        return response()->json('Updated successfully');
+        return response()->json([
+            'message' => 'Updated successfully',
+            'status' => $nextStatus,
+        ]);
     }
 
     public function getJobList(Request $req, CompanyAccessService $access)

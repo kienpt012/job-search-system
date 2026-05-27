@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { AiOutlinePlus } from "react-icons/ai";
-import { BsEye, BsSearch } from "react-icons/bs";
+import { BsEye, BsSearch, BsTrashFill } from "react-icons/bs";
 import { useNavigate } from "react-router-dom";
 import { useSelector } from "react-redux";
 import JobDetail from "./JobDetail";
@@ -80,6 +80,18 @@ function JobManagement() {
     tempJobs[index].is_active = status;
     tempJobs[index].status = status ? "active" : "paused";
     setJobs(tempJobs);
+  };
+
+  const handleDeleteJob = async (job) => {
+    if (!canManageJobs) return;
+    if (!window.confirm(`Xóa tin "${job.jname}" và toàn bộ hồ sơ ứng tuyển liên quan?`)) return;
+
+    try {
+      await employerApi.deleteJob(job.id);
+      setJobs((current) => current.filter((item) => item.id !== job.id));
+    } catch (error) {
+      alert(error?.response?.data?.message || "Không thể xóa tin tuyển dụng.");
+    }
   };
 
   useEffect(() => {
@@ -231,6 +243,14 @@ function JobManagement() {
                   data-bs-target="#jobDetail"
                   onClick={() => setCurJob(item)}
                 />
+                {canManageJobs && (
+                  <BsTrashFill
+                    className="text-danger ms-3"
+                    style={{ cursor: "pointer" }}
+                    title="Xóa tin tuyển dụng"
+                    onClick={() => handleDeleteJob(item)}
+                  />
+                )}
               </td>
             </tr>
           ))}

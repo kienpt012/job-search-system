@@ -13,13 +13,18 @@ use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 class EmployerRegistrationController extends Controller
 {
     public function store(Request $request)
     {
+        $email = strtolower(trim((string) $request->input('email')));
+        $request->merge(['email' => $email]);
+
         $validated = $request->validate([
-            'email' => 'required|string|email|max:255|unique:users,email|unique:employer_registrations,email',
+            'email' => ['required', 'string', 'email', 'max:255', Rule::unique('users', 'email')],
             'company_name' => 'required|string|max:150',
             'address' => 'required|string|max:255',
             'contact_name' => 'nullable|string|max:100',
@@ -31,6 +36,16 @@ class EmployerRegistrationController extends Controller
             'documents' => 'required|array|min:1|max:5',
             'documents.*' => 'file|mimes:pdf,jpg,jpeg,png,webp|max:10240',
         ]);
+
+        $hasPendingRegistration = EmployerRegistration::where('email', $validated['email'])
+            ->where('status', 'pending')
+            ->exists();
+
+        if ($hasPendingRegistration) {
+            throw ValidationException::withMessages([
+                'email' => 'Email này đang có hồ sơ đăng ký chờ duyệt. Vui lòng chờ admin xử lý hoặc dùng email khác.',
+            ]);
+        }
 
         $documents = [];
         foreach ($request->file('documents', []) as $document) {

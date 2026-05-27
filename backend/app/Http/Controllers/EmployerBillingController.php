@@ -30,6 +30,9 @@ class EmployerBillingController extends Controller
 
         $request->validate([
             'plan_key' => 'required|string',
+            'source' => 'nullable|string|in:web,mobile',
+            'return_url' => 'nullable|string|max:1000',
+            'cancel_url' => 'nullable|string|max:1000',
         ]);
 
         $employer = $this->billing->currentEmployer();
@@ -38,7 +41,11 @@ class EmployerBillingController extends Controller
         }
 
         try {
-            $payment = $this->billing->createPayOSCheckout($employer, $request->input('plan_key'));
+            $payment = $this->billing->createPayOSCheckout($employer, $request->input('plan_key'), [
+                'source' => $request->input('source', 'web'),
+                'return_url' => $request->input('return_url'),
+                'cancel_url' => $request->input('cancel_url'),
+            ]);
         } catch (RuntimeException $exception) {
             return response()->json(['message' => $exception->getMessage()], 503);
         }

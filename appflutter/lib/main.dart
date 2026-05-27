@@ -7,12 +7,37 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 const String kDefaultApiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
   defaultValue: 'http://192.168.2.220:8000/api',
 );
+
+const String kMobilePaymentReturnUrl =
+    'recruitmentstudio://employer/billing?status=success';
+const String kMobilePaymentCancelUrl =
+    'recruitmentstudio://employer/billing?status=cancelled';
+
+const List<String> kEducationOptions = [
+  'Không yêu cầu',
+  'THPT',
+  'Trung cấp',
+  'Cao đẳng',
+  'Đại học',
+  'Sau đại học',
+];
+
+const List<String> kLanguageOptions = [
+  'Không yêu cầu',
+  'Tiếng Anh',
+  'Tiếng Nhật',
+  'Tiếng Hàn',
+  'Tiếng Trung',
+  'Tiếng Pháp',
+  'Tiếng Đức',
+];
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -51,6 +76,7 @@ class ApiConfig extends ChangeNotifier {
     _baseUrl = _normalize(value);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_prefKey, _baseUrl);
+    ApiClient.clearCache();
     notifyListeners();
   }
 
@@ -58,7 +84,11 @@ class ApiConfig extends ChangeNotifier {
     if (url == null || url.trim().isEmpty) return '';
     final value = url.trim();
     final parsed = Uri.tryParse(value);
-    if (parsed == null || !parsed.hasScheme) return value;
+    if (parsed == null) return value;
+    if (!parsed.hasScheme) {
+      final normalizedPath = value.startsWith('/') ? value : '/$value';
+      return '$assetOrigin$normalizedPath';
+    }
     if (parsed.host == '127.0.0.1' || parsed.host == 'localhost') {
       final base = baseUri;
       return parsed
@@ -94,6 +124,7 @@ class AuthSession extends ChangeNotifier {
   String? candidateToken;
   String? employerToken;
   Map<String, dynamic> user;
+  int _candidateJobsVersion = 0;
 
   bool get isCandidate => role == 1 && candidateToken != null;
   bool get isEmployer => role == 2 && employerToken != null;
@@ -131,6 +162,15 @@ class AuthSession extends ChangeNotifier {
     return intValue(user['id']);
   }
 
+  int get candidateJobsVersion => _candidateJobsVersion;
+
+  void markCandidateJobsChanged() {
+    if (!isCandidate) return;
+    _candidateJobsVersion++;
+    ApiClient.clearCache();
+    notifyListeners();
+  }
+
   static Future<AuthSession> load() async {
     final prefs = await SharedPreferences.getInstance();
     final rawUser = prefs.getString(_userKey);
@@ -148,16 +188,24 @@ class AuthSession extends ChangeNotifier {
     required int role,
     required String token,
     required Map<String, dynamic> user,
+    bool notify = true,
   }) async {
     this.role = role;
     this.user = user;
     if (role == 1) candidateToken = token;
     if (role == 2) employerToken = token;
+    ApiClient.clearCache();
     await _save();
-    notifyListeners();
+    if (notify) notifyListeners();
   }
 
-  Future<void> updateUser(Map<String, dynamic> nextUser) async {
+  Future<void> updateUser(
+    Map<String, dynamic> nextUser, {
+    bool forceNotify = false,
+  }) async {
+    if (!forceNotify && jsonEncode(user) == jsonEncode(nextUser)) {
+      return;
+    }
     user = nextUser;
     await _save();
     notifyListeners();
@@ -168,6 +216,7 @@ class AuthSession extends ChangeNotifier {
     candidateToken = null;
     employerToken = null;
     user = {};
+    ApiClient.clearCache();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_roleKey);
     await prefs.remove(_candidateTokenKey);
@@ -215,11 +264,24 @@ class UploadFile {
   final Uint8List bytes;
 }
 
+class _ApiCacheEntry {
+  _ApiCacheEntry(this.value) : createdAt = DateTime.now();
+
+  final dynamic value;
+  final DateTime createdAt;
+
+  bool get isFresh =>
+      DateTime.now().difference(createdAt) < const Duration(seconds: 45);
+}
+
 class ApiClient {
   ApiClient(this.config, this.session);
 
   final ApiConfig config;
   final AuthSession session;
+  static final Map<String, _ApiCacheEntry> _cache = {};
+
+  static void clearCache() => _cache.clear();
 
   Future<dynamic> get(String path, {Map<String, dynamic>? query, int? role}) =>
       _send('GET', path, query: query, role: role);
@@ -257,7 +319,9 @@ class ApiClient {
     }
     final streamed = await request.send();
     final response = await http.Response.fromStream(streamed);
-    return _handleResponse(response);
+    final decoded = _handleResponse(response);
+    clearCache();
+    return decoded;
   }
 
   Future<dynamic> _send(
@@ -270,6 +334,13 @@ class ApiClient {
     final uri = _uri(path, query: query);
     final headers = _headers(role);
     final encoded = body == null ? null : jsonEncode(body);
+    final cacheKey = _cacheKey(method, uri, role);
+    if (method == 'GET') {
+      final cached = _cache[cacheKey];
+      if (cached != null && cached.isFresh) {
+        return cached.value;
+      }
+    }
     final response = switch (method) {
       'GET' => await http.get(uri, headers: headers),
       'POST' => await http.post(uri, headers: headers, body: encoded),
@@ -277,7 +348,18 @@ class ApiClient {
       'DELETE' => await http.delete(uri, headers: headers),
       _ => throw ArgumentError('Unsupported HTTP method $method'),
     };
-    return _handleResponse(response);
+    final decoded = _handleResponse(response);
+    if (method == 'GET') {
+      _cache[cacheKey] = _ApiCacheEntry(decoded);
+    } else {
+      clearCache();
+    }
+    return decoded;
+  }
+
+  String _cacheKey(String method, Uri uri, int? role) {
+    final token = session.tokenFor(role) ?? '';
+    return '$method|${role ?? session.role ?? 0}|$token|$uri';
   }
 
   Uri _uri(String path, {Map<String, dynamic>? query}) {
@@ -310,9 +392,9 @@ class ApiClient {
     final message = decoded is Map
         ? textOf(
             decoded['message'] ?? decoded['error'],
-            'Không thể kết nối API',
+            'Không thể kết nối máy chủ',
           )
-        : textOf(decoded, 'Không thể kết nối API');
+        : textOf(decoded, 'Không thể kết nối máy chủ');
     throw ApiException(message, response.statusCode);
   }
 
@@ -391,13 +473,18 @@ class RecruitmentApi {
       ),
     );
     final token = textOf(asMap(res['authorization'])['token']);
-    if (token.isEmpty) throw ApiException('API không trả token đăng nhập.');
-    await session.setLogin(role: role, token: token, user: asMap(res['user']));
+    if (token.isEmpty) throw ApiException('Máy chủ không trả token đăng nhập.');
+    await session.setLogin(
+      role: role,
+      token: token,
+      user: asMap(res['user']),
+      notify: false,
+    );
     try {
       final user = role == 2
           ? await employerMe()
           : asMap(await client.get('/getMe', role: role));
-      await session.updateUser(user);
+      await session.updateUser(user, forceNotify: true);
     } catch (_) {
       await session.clear();
       rethrow;
@@ -436,6 +523,25 @@ class RecruitmentApi {
         .toList(),
   );
 
+  Future<Map<String, dynamic>> requestPasswordOtp(
+    String email,
+    int role,
+  ) async => asMap(
+    await client.post('/password/otp', body: {'email': email, 'role': role}),
+  );
+
+  Future<void> resetPasswordOtp(
+    String email,
+    int role,
+    String otp,
+    String password,
+  ) async {
+    await client.post(
+      '/password/reset',
+      body: {'email': email, 'role': role, 'otp': otp, 'password': password},
+    );
+  }
+
   Future<List<Map<String, dynamic>>> industries() async =>
       listFromResponse(await client.get('/industries'), key: 'inf');
 
@@ -460,12 +566,27 @@ class RecruitmentApi {
   Future<List<Map<String, dynamic>>> jobSkills(int id) async =>
       listFromResponse(await client.get('/jobs/$id/getJobSkills'));
 
-  Future<void> applyJob(int jobId, UploadFile cv, {int? resumeId}) async {
+  Future<void> applyJob(
+    int jobId, {
+    UploadFile? cv,
+    bool useLatestCv = false,
+  }) async {
+    if (cv == null && !useLatestCv) {
+      throw ApiException(
+        'Vui lòng tải lên CV PDF hoặc chọn dùng lại CV đã nộp gần nhất.',
+      );
+    }
     await client.multipart(
       '/jobs/$jobId/apply',
       role: 1,
-      fields: {'id': jobId, 'resume_id': resumeId, 'fname': cv.name},
-      files: [UploadFile(field: 'cv', name: cv.name, bytes: cv.bytes)],
+      fields: {
+        'id': jobId,
+        'use_latest_cv': useLatestCv ? 1 : null,
+        'fname': cv?.name,
+      },
+      files: cv == null
+          ? const []
+          : [UploadFile(field: 'cv', name: cv.name, bytes: cv.bytes)],
     );
   }
 
@@ -525,17 +646,11 @@ class RecruitmentApi {
     );
   }
 
-  Future<List<Map<String, dynamic>>> candidateAppliedJobs(
-    int candidateId,
-  ) async => listFromResponse(
-    await client.get('/candidates/$candidateId/getAppliedJobs', role: 1),
-  );
+  Future<List<Map<String, dynamic>>> candidateAppliedJobs() async =>
+      listFromResponse(await client.get('/candidates/appliedJobs', role: 1));
 
-  Future<List<Map<String, dynamic>>> candidateSavedJobs(
-    int candidateId,
-  ) async => listFromResponse(
-    await client.get('/candidates/$candidateId/getSavedJobs', role: 1),
-  );
+  Future<List<Map<String, dynamic>>> candidateSavedJobs() async =>
+      listFromResponse(await client.get('/candidates/savedJobs', role: 1));
 
   Future<Map<String, dynamic>> nearbyCompanies() async =>
       asMap(await client.get('/candidates/nearbyCompanies', role: 1));
@@ -608,6 +723,9 @@ class RecruitmentApi {
   Future<Map<String, dynamic>> resumeDetail(int id) async =>
       asMap(await client.get('/resumes/$id/getById', role: 1));
 
+  Future<Map<String, dynamic>> employerResumeDetail(int id) async =>
+      asMap(await client.get('/resumes/$id/getById', role: 2));
+
   Future<void> createResume(Map<String, dynamic> data) async {
     await client.post('/resumes', role: 1, body: data);
   }
@@ -661,6 +779,10 @@ class RecruitmentApi {
       asMap(await client.patch('/employer/members/$id', role: 2, body: data));
 
   Future<void> lockMember(int id) async {
+    await updateMember(id, {'status': 'inactive', 'is_active': false});
+  }
+
+  Future<void> deleteMember(int id) async {
     await client.delete('/employer/members/$id', role: 2);
   }
 
@@ -672,7 +794,12 @@ class RecruitmentApi {
         await client.post(
           '/employer/billing/checkout',
           role: 2,
-          body: {'plan_key': planKey},
+          body: {
+            'plan_key': planKey,
+            'source': 'mobile',
+            'return_url': kMobilePaymentReturnUrl,
+            'cancel_url': kMobilePaymentCancelUrl,
+          },
         ),
       );
 
@@ -746,6 +873,10 @@ class RecruitmentApi {
     await client.post('/jobs/$id/update', role: 2, body: data);
   }
 
+  Future<void> deleteJob(int id) async {
+    await client.delete('/jobs/$id', role: 2);
+  }
+
   Future<void> changeJobStatus(int jobId, bool active) async {
     await client.post(
       '/companies/$jobId/changeJobStatus',
@@ -766,9 +897,11 @@ class RecruitmentApi {
     key: 'data',
   );
 
-  Future<void> processApplying(Map<String, dynamic> data) async {
-    await client.post('/companies/processApplying', role: 2, body: data);
-  }
+  Future<Map<String, dynamic>> processApplying(
+    Map<String, dynamic> data,
+  ) async => asMap(
+    await client.post('/companies/processApplying', role: 2, body: data),
+  );
 
   Future<List<Map<String, dynamic>>> searchCandidates(
     Map<String, dynamic> filters,
@@ -848,6 +981,47 @@ class RecruitmentApp extends StatelessWidget {
                 vertical: 12,
               ),
             ),
+            filledButtonTheme: FilledButtonThemeData(
+              style: FilledButton.styleFrom(
+                minimumSize: const Size(0, 44),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                textStyle: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
+            outlinedButtonTheme: OutlinedButtonThemeData(
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size(0, 44),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                textStyle: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
+            chipTheme: ChipThemeData(
+              backgroundColor: const Color(0xFFF3FAF7),
+              selectedColor: const Color(0xFF0F766E),
+              disabledColor: const Color(0xFFE7EFEC),
+              secondarySelectedColor: const Color(0xFF0F766E),
+              checkmarkColor: Colors.white,
+              side: const BorderSide(color: Color(0xFFBFD5D0)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+              labelStyle: const TextStyle(
+                color: Color(0xFF173A36),
+                fontWeight: FontWeight.w800,
+              ),
+              secondaryLabelStyle: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            listTileTheme: const ListTileThemeData(
+              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              minLeadingWidth: 28,
+            ),
           ),
           home: RootShell(config: config, session: session),
         );
@@ -869,6 +1043,10 @@ class RootShell extends StatefulWidget {
 class _RootShellState extends State<RootShell> {
   int _index = 0;
   int? _lastRole;
+  String? _pageSignature;
+  bool _sideRailOpen = true;
+  final PageStorageBucket _pageStorageBucket = PageStorageBucket();
+  List<_NavPage> _cachedPages = [];
 
   RecruitmentApi get api =>
       RecruitmentApi(ApiClient(widget.config, widget.session));
@@ -896,11 +1074,41 @@ class _RootShellState extends State<RootShell> {
   @override
   void didUpdateWidget(covariant RootShell oldWidget) {
     super.didUpdateWidget(oldWidget);
-    final maxIndex = _pages.length - 1;
-    if (_index > maxIndex) _index = 0;
+    if (oldWidget.session.role != widget.session.role) {
+      _index = 0;
+      _pageSignature = null;
+      _cachedPages = [];
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _hydrateEmployerSession();
+      });
+    }
+  }
+
+  String _signatureForSession() {
+    if (widget.session.isCandidate) return 'candidate';
+    if (widget.session.isEmployer) {
+      final permissions =
+          widget.session.employerPermissions.entries
+              .where((entry) => boolValue(entry.value))
+              .map((entry) => entry.key)
+              .toList()
+            ..sort();
+      return 'employer:${widget.session.employerRole}:${permissions.join(',')}';
+    }
+    return 'guest';
   }
 
   List<_NavPage> get _pages {
+    final signature = _signatureForSession();
+    if (_cachedPages.isEmpty || signature != _pageSignature) {
+      _pageSignature = signature;
+      _cachedPages = _buildPages();
+      if (_index >= _cachedPages.length) _index = 0;
+    }
+    return _cachedPages;
+  }
+
+  List<_NavPage> _buildPages() {
     if (widget.session.isCandidate) {
       return [
         _NavPage(
@@ -916,6 +1124,15 @@ class _RootShellState extends State<RootShell> {
           'Việc làm',
           Icons.work_outline,
           JobsScreen(api: api, session: widget.session, config: widget.config),
+        ),
+        _NavPage(
+          'Công ty',
+          Icons.business_outlined,
+          CompaniesScreen(
+            api: api,
+            config: widget.config,
+            session: widget.session,
+          ),
         ),
         _NavPage(
           'Hồ sơ',
@@ -968,7 +1185,7 @@ class _RootShellState extends State<RootShell> {
           _NavPage(
             'Ứng viên',
             Icons.people_outline,
-            EmployerApplicationsScreen(api: api),
+            EmployerApplicationsScreen(api: api, config: widget.config),
           ),
         );
       }
@@ -1036,7 +1253,11 @@ class _RootShellState extends State<RootShell> {
       _NavPage(
         'Công ty',
         Icons.business_outlined,
-        CompaniesScreen(api: api, config: widget.config),
+        CompaniesScreen(
+          api: api,
+          config: widget.config,
+          session: widget.session,
+        ),
       ),
       _NavPage(
         'Tài khoản',
@@ -1051,54 +1272,124 @@ class _RootShellState extends State<RootShell> {
     if (_lastRole != widget.session.role) {
       _lastRole = widget.session.role;
       _index = 0;
+      _pageSignature = null;
+      _cachedPages = [];
     }
     final pages = _pages;
     if (_index >= pages.length) _index = 0;
     final active = pages[_index];
-    return Scaffold(
-      appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Recruitment',
-              style: TextStyle(fontWeight: FontWeight.w800),
+    final roleLabel = widget.session.isEmployer
+        ? memberRoleText(widget.session.employerRole)
+        : widget.session.isCandidate
+        ? 'Ứng viên'
+        : 'Khách';
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 860;
+        return Scaffold(
+          drawer: wide
+              ? null
+              : Drawer(
+                  width: 310,
+                  child: _AppSideMenu(
+                    pages: pages,
+                    selectedIndex: _index,
+                    session: widget.session,
+                    expanded: true,
+                    onSelect: (value) {
+                      Navigator.pop(context);
+                      setState(() => _index = value);
+                    },
+                    onToggle: null,
+                    onLogout: widget.session.isAuthenticated ? _logout : null,
+                  ),
+                ),
+          appBar: AppBar(
+            leading: Builder(
+              builder: (context) => IconButton(
+                tooltip: wide ? 'Ẩn hiện menu' : 'Mở menu',
+                onPressed: () {
+                  if (wide) {
+                    setState(() => _sideRailOpen = !_sideRailOpen);
+                  } else {
+                    Scaffold.of(context).openDrawer();
+                  }
+                },
+                icon: Icon(
+                  wide && _sideRailOpen ? Icons.menu_open : Icons.menu,
+                ),
+              ),
             ),
-            Text(
-              widget.config.baseUrl,
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: Colors.black54),
+            title: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Recruitment Studio',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontWeight: FontWeight.w900),
+                ),
+                Text(
+                  '${active.label} • $roleLabel',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: const Color(0xFF64748B),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
-        actions: [
-          IconButton(
-            tooltip: 'Cài đặt API',
-            onPressed: () => showApiSettingsDialog(context, widget.config, api),
-            icon: const Icon(Icons.settings_outlined),
+            actions: [
+              if (widget.session.isAuthenticated)
+                IconButton(
+                  tooltip: 'Đăng xuất',
+                  onPressed: _logout,
+                  icon: const Icon(Icons.logout),
+                ),
+            ],
           ),
-          if (widget.session.isAuthenticated)
-            IconButton(
-              tooltip: 'Đăng xuất',
-              onPressed: () async {
-                await api.logout(widget.session);
-                if (mounted) setState(() => _index = 0);
-              },
-              icon: const Icon(Icons.logout),
+          body: SafeArea(
+            child: Row(
+              children: [
+                if (wide)
+                  _AppSideMenu(
+                    pages: pages,
+                    selectedIndex: _index,
+                    session: widget.session,
+                    expanded: _sideRailOpen,
+                    onSelect: (value) => setState(() => _index = value),
+                    onToggle: () =>
+                        setState(() => _sideRailOpen = !_sideRailOpen),
+                    onLogout: widget.session.isAuthenticated ? _logout : null,
+                  ),
+                Expanded(
+                  child: PageStorage(
+                    bucket: _pageStorageBucket,
+                    child: IndexedStack(
+                      index: _index,
+                      children: [for (final page in pages) page.child],
+                    ),
+                  ),
+                ),
+              ],
             ),
-        ],
-      ),
-      body: SafeArea(child: active.child),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: (value) => setState(() => _index = value),
-        destinations: [
-          for (final page in pages)
-            NavigationDestination(icon: Icon(page.icon), label: page.label),
-        ],
-      ),
+          ),
+        );
+      },
     );
+  }
+
+  Future<void> _logout() async {
+    await api.logout(widget.session);
+    if (mounted) {
+      setState(() {
+        _index = 0;
+        _pageSignature = null;
+        _cachedPages = [];
+      });
+    }
   }
 }
 
@@ -1108,6 +1399,310 @@ class _NavPage {
   final String label;
   final IconData icon;
   final Widget child;
+}
+
+class _AppSideMenu extends StatelessWidget {
+  const _AppSideMenu({
+    required this.pages,
+    required this.selectedIndex,
+    required this.session,
+    required this.expanded,
+    required this.onSelect,
+    required this.onToggle,
+    required this.onLogout,
+  });
+
+  final List<_NavPage> pages;
+  final int selectedIndex;
+  final AuthSession session;
+  final bool expanded;
+  final ValueChanged<int> onSelect;
+  final VoidCallback? onToggle;
+  final VoidCallback? onLogout;
+
+  @override
+  Widget build(BuildContext context) {
+    final width = expanded ? 292.0 : 84.0;
+    final name = session.isEmployer
+        ? textOf(session.employer['name'], 'Nhà tuyển dụng')
+        : session.isCandidate
+        ? fullName(session.candidate)
+        : 'Khách truy cập';
+    final role = session.isEmployer
+        ? memberRoleText(session.employerRole)
+        : session.isCandidate
+        ? 'Ứng viên'
+        : 'Khám phá việc làm';
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+      width: width,
+      decoration: const BoxDecoration(
+        color: Color(0xFF0E2E33),
+        border: Border(right: BorderSide(color: Color(0x1AFFFFFF))),
+      ),
+      child: SafeArea(
+        child: Column(
+          children: [
+            Padding(
+              padding: EdgeInsets.fromLTRB(14, 14, 14, expanded ? 10 : 6),
+              child: expanded
+                  ? Row(
+                      children: [
+                        const _WorkspaceMark(),
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Recruitment',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 18,
+                                ),
+                              ),
+                              Text(
+                                'Không gian làm việc',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: Color(0xFFB6D4CD),
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (onToggle != null)
+                          IconButton(
+                            tooltip: 'Thu gọn menu',
+                            onPressed: onToggle,
+                            icon: const Icon(
+                              Icons.keyboard_double_arrow_left,
+                              color: Colors.white,
+                            ),
+                          ),
+                      ],
+                    )
+                  : Column(
+                      children: [
+                        const _WorkspaceMark(),
+                        if (onToggle != null) ...[
+                          const SizedBox(height: 6),
+                          IconButton(
+                            tooltip: 'Mở rộng menu',
+                            onPressed: onToggle,
+                            icon: const Icon(
+                              Icons.keyboard_double_arrow_right,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+            ),
+            Padding(
+              padding: EdgeInsets.symmetric(
+                horizontal: expanded ? 14 : 10,
+                vertical: 6,
+              ),
+              child: Container(
+                width: double.infinity,
+                padding: EdgeInsets.all(expanded ? 12 : 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF143F45),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0x1FFFFFFF)),
+                ),
+                child: expanded
+                    ? Row(
+                        children: [
+                          CircleAvatar(
+                            radius: 22,
+                            backgroundColor: const Color(0xFF14B8A6),
+                            child: Text(
+                              initialsOf(name),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  role,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: Color(0xFFB6D4CD),
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      )
+                    : Tooltip(
+                        message: '$name\n$role',
+                        child: CircleAvatar(
+                          radius: 20,
+                          backgroundColor: const Color(0xFF14B8A6),
+                          child: Text(
+                            initialsOf(name),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                      ),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Expanded(
+              child: ListView.separated(
+                padding: EdgeInsets.symmetric(
+                  horizontal: expanded ? 12 : 10,
+                  vertical: 8,
+                ),
+                itemCount: pages.length,
+                separatorBuilder: (context, index) => const SizedBox(height: 4),
+                itemBuilder: (context, index) {
+                  final page = pages[index];
+                  final selected = index == selectedIndex;
+                  return Tooltip(
+                    message: expanded ? '' : page.label,
+                    child: Material(
+                      color: selected
+                          ? const Color(0xFF0F766E)
+                          : Colors.transparent,
+                      borderRadius: BorderRadius.circular(8),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(8),
+                        onTap: () => onSelect(index),
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: expanded ? 12 : 0,
+                            vertical: 12,
+                          ),
+                          child: Row(
+                            mainAxisAlignment: expanded
+                                ? MainAxisAlignment.start
+                                : MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                page.icon,
+                                color: selected
+                                    ? Colors.white
+                                    : const Color(0xFFB6D4CD),
+                              ),
+                              if (expanded) ...[
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Text(
+                                    page.label,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: selected
+                                          ? Colors.white
+                                          : const Color(0xFFD7E8E4),
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+            if (onLogout != null)
+              Padding(
+                padding: EdgeInsets.fromLTRB(
+                  expanded ? 12 : 10,
+                  4,
+                  expanded ? 12 : 10,
+                  14,
+                ),
+                child: expanded
+                    ? OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.white,
+                          side: const BorderSide(color: Color(0x40FFFFFF)),
+                          minimumSize: const Size(0, 46),
+                          padding: const EdgeInsets.symmetric(horizontal: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        onPressed: onLogout,
+                        icon: const Icon(Icons.logout),
+                        label: const Text(
+                          'Đăng xuất',
+                          style: TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                      )
+                    : Tooltip(
+                        message: 'Đăng xuất',
+                        child: IconButton.filledTonal(
+                          style: IconButton.styleFrom(
+                            foregroundColor: Colors.white,
+                            backgroundColor: const Color(0xFF143F45),
+                          ),
+                          onPressed: onLogout,
+                          icon: const Icon(Icons.logout),
+                        ),
+                      ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _WorkspaceMark extends StatelessWidget {
+  const _WorkspaceMark();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 44,
+      height: 44,
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F766E),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: const Icon(Icons.work_outline, color: Colors.white),
+    );
+  }
 }
 
 class JobsScreen extends StatefulWidget {
@@ -1236,67 +1831,53 @@ class _JobsScreenState extends State<JobsScreen> {
                     onSubmitted: (_) => _loadJobs(page: 1),
                   ),
                   const SizedBox(height: 10),
-                  Row(
+                  ResponsiveFormRow(
                     children: [
-                      Expanded(
-                        child: _simpleDropdown(
-                          label: 'Ngành',
-                          value: _industryId,
-                          items: _industries,
-                          onChanged: (value) =>
-                              setState(() => _industryId = value),
-                        ),
+                      _simpleDropdown(
+                        label: 'Ngành',
+                        value: _industryId,
+                        items: _industries,
+                        onChanged: (value) =>
+                            setState(() => _industryId = value),
                       ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: _simpleDropdown(
-                          label: 'Địa điểm',
-                          value: _locationId,
-                          items: _locations,
-                          onChanged: (value) =>
-                              setState(() => _locationId = value),
-                        ),
+                      _simpleDropdown(
+                        label: 'Địa điểm',
+                        value: _locationId,
+                        items: _locations,
+                        onChanged: (value) =>
+                            setState(() => _locationId = value),
                       ),
                     ],
                   ),
                   const SizedBox(height: 10),
-                  Row(
+                  ResponsiveFormRow(
                     children: [
-                      Expanded(
-                        child: _simpleDropdown(
-                          label: 'Hình thức',
-                          value: _jtypeId,
-                          items: _jtypes,
-                          onChanged: (value) =>
-                              setState(() => _jtypeId = value),
-                        ),
+                      _simpleDropdown(
+                        label: 'Hình thức',
+                        value: _jtypeId,
+                        items: _jtypes,
+                        onChanged: (value) => setState(() => _jtypeId = value),
                       ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: _simpleDropdown(
-                          label: 'Cấp bậc',
-                          value: _jlevelId,
-                          items: _jlevels,
-                          onChanged: (value) =>
-                              setState(() => _jlevelId = value),
-                        ),
+                      _simpleDropdown(
+                        label: 'Cấp bậc',
+                        value: _jlevelId,
+                        items: _jlevels,
+                        onChanged: (value) => setState(() => _jlevelId = value),
                       ),
                     ],
                   ),
                   const SizedBox(height: 10),
-                  Row(
+                  ResponsiveFormRow(
+                    minChildWidth: 160,
                     children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _salary,
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(
-                            labelText: 'Lương tối thiểu',
-                            suffixText: 'triệu',
-                          ),
+                      TextField(
+                        controller: _salary,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'Lương tối thiểu',
+                          suffixText: 'triệu',
                         ),
                       ),
-                      const SizedBox(width: 10),
                       FilledButton.icon(
                         onPressed: () => _loadJobs(page: 1),
                         icon: const Icon(Icons.tune),
@@ -1361,10 +1942,16 @@ class _JobsScreenState extends State<JobsScreen> {
 }
 
 class CompaniesScreen extends StatefulWidget {
-  const CompaniesScreen({super.key, required this.api, required this.config});
+  const CompaniesScreen({
+    super.key,
+    required this.api,
+    required this.config,
+    required this.session,
+  });
 
   final RecruitmentApi api;
   final ApiConfig config;
+  final AuthSession session;
 
   @override
   State<CompaniesScreen> createState() => _CompaniesScreenState();
@@ -1442,6 +2029,7 @@ class _CompaniesScreenState extends State<CompaniesScreen> {
                 onTap: () => showCompanyDetailSheet(
                   context,
                   widget.api,
+                  widget.session,
                   widget.config,
                   intValue(company['id']) ?? 0,
                 ),
@@ -1610,6 +2198,18 @@ class _LoginPaneState extends State<LoginPane> {
                       label: const Text('Đăng nhập'),
                     ),
                   ),
+                  const SizedBox(height: 8),
+                  TextButton(
+                    onPressed: _loading
+                        ? null
+                        : () => showForgotPasswordDialog(
+                            context,
+                            widget.api,
+                            initialRole: _role,
+                            initialEmail: _email.text.trim(),
+                          ),
+                    child: const Text('Quên mật khẩu?'),
+                  ),
                 ],
               ),
             ),
@@ -1618,6 +2218,154 @@ class _LoginPaneState extends State<LoginPane> {
       ],
     );
   }
+}
+
+Future<void> showForgotPasswordDialog(
+  BuildContext context,
+  RecruitmentApi api, {
+  required int initialRole,
+  String initialEmail = '',
+}) async {
+  final formKey = GlobalKey<FormState>();
+  final email = TextEditingController(text: initialEmail);
+  final otp = TextEditingController();
+  final password = TextEditingController();
+  var role = initialRole == 2 ? 2 : 1;
+  var otpSent = false;
+  var loading = false;
+
+  await showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (context) => StatefulBuilder(
+      builder: (context, setState) => AlertDialog(
+        title: const Text('Đặt lại mật khẩu'),
+        content: SizedBox(
+          width: 520,
+          child: Form(
+            key: formKey,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SegmentedButton<int>(
+                    segments: const [
+                      ButtonSegment(
+                        value: 1,
+                        icon: Icon(Icons.person_outline),
+                        label: Text('Ứng viên'),
+                      ),
+                      ButtonSegment(
+                        value: 2,
+                        icon: Icon(Icons.business_outlined),
+                        label: Text('Nhà tuyển dụng'),
+                      ),
+                    ],
+                    selected: {role},
+                    onSelectionChanged: loading
+                        ? null
+                        : (value) => setState(() => role = value.first),
+                  ),
+                  const SizedBox(height: 12),
+                  textField(
+                    email,
+                    'Email đăng nhập',
+                    keyboardType: TextInputType.emailAddress,
+                    validator: requiredValidator,
+                  ),
+                  if (otpSent) ...[
+                    const SizedBox(height: 10),
+                    textField(
+                      otp,
+                      'Mã OTP',
+                      keyboardType: TextInputType.number,
+                      validator: (value) {
+                        if (value == null || value.trim().length != 6) {
+                          return 'Nhập mã OTP 6 số';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    textField(
+                      password,
+                      'Mật khẩu mới',
+                      obscureText: true,
+                      validator: (value) {
+                        if (value == null || value.length < 6) {
+                          return 'Mật khẩu tối thiểu 6 ký tự';
+                        }
+                        return null;
+                      },
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: loading ? null : () => popDialogSafely<void>(context),
+            child: const Text('Hủy'),
+          ),
+          FilledButton(
+            onPressed: loading
+                ? null
+                : () async {
+                    if (!formKey.currentState!.validate()) return;
+                    setState(() => loading = true);
+                    try {
+                      if (!otpSent) {
+                        final response = await api.requestPasswordOtp(
+                          email.text.trim(),
+                          role,
+                        );
+                        final debugOtp = textOf(response['debug_otp']);
+                        if (debugOtp.isNotEmpty) {
+                          otp.text = debugOtp;
+                        }
+                        showSnack(
+                          context,
+                          debugOtp.isEmpty
+                              ? 'Đã gửi OTP về email.'
+                              : 'Đã tạo OTP. Môi trường local đã tự điền mã.',
+                        );
+                        setState(() {
+                          otpSent = true;
+                          loading = false;
+                        });
+                        return;
+                      }
+                      await api.resetPasswordOtp(
+                        email.text.trim(),
+                        role,
+                        otp.text.trim(),
+                        password.text,
+                      );
+                      showSnack(context, 'Đã đặt lại mật khẩu.');
+                      await popDialogSafely<void>(context);
+                    } catch (error) {
+                      showSnack(context, error.toString(), isError: true);
+                      setState(() => loading = false);
+                    }
+                  },
+            child: Text(
+              loading
+                  ? 'Đang xử lý...'
+                  : otpSent
+                  ? 'Đổi mật khẩu'
+                  : 'Gửi OTP',
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+
+  email.dispose();
+  otp.dispose();
+  password.dispose();
 }
 
 class CandidateRegisterPane extends StatefulWidget {
@@ -1695,23 +2443,10 @@ class _CandidateRegisterPaneState extends State<CandidateRegisterPane> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
+                  ResponsiveFormRow(
                     children: [
-                      Expanded(
-                        child: textField(
-                          _last,
-                          'Họ',
-                          validator: requiredValidator,
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: textField(
-                          _first,
-                          'Tên',
-                          validator: requiredValidator,
-                        ),
-                      ),
+                      textField(_last, 'Họ', validator: requiredValidator),
+                      textField(_first, 'Tên', validator: requiredValidator),
                     ],
                   ),
                   const SizedBox(height: 10),
@@ -1739,19 +2474,37 @@ class _CandidateRegisterPaneState extends State<CandidateRegisterPane> {
                     runSpacing: 8,
                     children: [
                       for (final skill in _skills.take(24))
-                        FilterChip(
-                          label: Text(textOf(skill['name'])),
-                          selected: _selectedSkills.contains(
-                            intValue(skill['id']),
-                          ),
-                          onSelected: (selected) {
+                        Builder(
+                          builder: (context) {
                             final id = intValue(skill['id']);
-                            if (id == null) return;
-                            setState(() {
-                              selected
-                                  ? _selectedSkills.add(id)
-                                  : _selectedSkills.remove(id);
-                            });
+                            final selected =
+                                id != null && _selectedSkills.contains(id);
+                            return FilterChip(
+                              label: Text(textOf(skill['name'])),
+                              selected: selected,
+                              backgroundColor: const Color(0xFFF5FBF8),
+                              selectedColor: const Color(0xFF0F766E),
+                              checkmarkColor: Colors.white,
+                              side: BorderSide(
+                                color: selected
+                                    ? const Color(0xFF0F766E)
+                                    : const Color(0xFFBFD5D0),
+                              ),
+                              labelStyle: TextStyle(
+                                color: selected
+                                    ? Colors.white
+                                    : const Color(0xFF173A36),
+                                fontWeight: FontWeight.w800,
+                              ),
+                              onSelected: (value) {
+                                if (id == null) return;
+                                setState(() {
+                                  value
+                                      ? _selectedSkills.add(id)
+                                      : _selectedSkills.remove(id);
+                                });
+                              },
+                            );
                           },
                         ),
                     ],
@@ -1906,38 +2659,30 @@ class _EmployerRegisterPaneState extends State<EmployerRegisterPane> {
                   const SizedBox(height: 10),
                   textField(_address, 'Địa chỉ', validator: requiredValidator),
                   const SizedBox(height: 10),
-                  Row(
+                  ResponsiveFormRow(
                     children: [
-                      Expanded(child: textField(_contact, 'Người liên hệ')),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: textField(
-                          _phone,
-                          'Điện thoại',
-                          keyboardType: TextInputType.phone,
-                        ),
+                      textField(_contact, 'Người liên hệ'),
+                      textField(
+                        _phone,
+                        'Điện thoại',
+                        keyboardType: TextInputType.phone,
                       ),
                     ],
                   ),
                   const SizedBox(height: 10),
                   textField(_website, 'Website'),
                   const SizedBox(height: 10),
-                  Row(
+                  ResponsiveFormRow(
                     children: [
-                      Expanded(
-                        child: textField(
-                          _minEmployees,
-                          'Nhân sự từ',
-                          keyboardType: TextInputType.number,
-                        ),
+                      textField(
+                        _minEmployees,
+                        'Nhân sự từ',
+                        keyboardType: TextInputType.number,
                       ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: textField(
-                          _maxEmployees,
-                          'Đến',
-                          keyboardType: TextInputType.number,
-                        ),
+                      textField(
+                        _maxEmployees,
+                        'Đến',
+                        keyboardType: TextInputType.number,
                       ),
                     ],
                   ),
@@ -2061,11 +2806,6 @@ class _CandidateDashboardScreenState extends State<CandidateDashboardScreen> {
                   icon: Icons.bookmark_border,
                 ),
                 MetricCard(
-                  label: 'CV đã tạo',
-                  value: textOf(_summary['resumes_count'], '0'),
-                  icon: Icons.description_outlined,
-                ),
-                MetricCard(
                   label: 'Mục hồ sơ',
                   value:
                       '${sectionCounts.values.fold<int>(0, (sum, value) => sum + (intValue(value) ?? 0))}',
@@ -2107,6 +2847,7 @@ class _CandidateDashboardScreenState extends State<CandidateDashboardScreen> {
                 onTap: () => showCompanyDetailSheet(
                   context,
                   widget.api,
+                  widget.session,
                   widget.config,
                   intValue(company['id']) ?? 0,
                 ),
@@ -2136,7 +2877,6 @@ class CandidateProfileScreen extends StatefulWidget {
 
 class _CandidateProfileScreenState extends State<CandidateProfileScreen> {
   Map<String, dynamic> _bundle = {};
-  List<Map<String, dynamic>> _resumes = [];
   bool _loading = true;
   String _error = '';
 
@@ -2152,13 +2892,9 @@ class _CandidateProfileScreenState extends State<CandidateProfileScreen> {
       _error = '';
     });
     try {
-      final results = await Future.wait([
-        widget.api.profileBundle(),
-        widget.api.resumes(),
-      ]);
+      final bundle = await widget.api.profileBundle();
       setState(() {
-        _bundle = asMap(results[0]);
-        _resumes = results[1] as List<Map<String, dynamic>>;
+        _bundle = bundle;
         _loading = false;
       });
     } catch (error) {
@@ -2189,12 +2925,54 @@ class _CandidateProfileScreenState extends State<CandidateProfileScreen> {
     }
   }
 
+  Future<void> _editSkills() async {
+    try {
+      final allSkills = await widget.api.jskills();
+      final currentSkills = listFromResponse(_bundle, key: 'skills');
+      final selectedNames = await showCandidateSkillPickerDialog(
+        context,
+        allSkills,
+        currentSkills,
+      );
+      if (selectedNames == null) return;
+
+      for (final skill in currentSkills) {
+        final id = intValue(skill['id']);
+        if (id != null) {
+          await widget.api.sectionDelete('skills', id);
+        }
+      }
+      for (final name in selectedNames) {
+        await widget.api.sectionCreate('skills', {'name': name});
+      }
+      showSnack(context, 'Đã cập nhật kỹ năng.');
+      await _load();
+    } catch (error) {
+      showSnack(context, error.toString(), isError: true);
+    }
+  }
+
   Future<void> _upsertSection(
     ProfileSection section, [
     Map<String, dynamic>? item,
   ]) async {
+    if (section.key == 'skills') {
+      await _editSkills();
+      return;
+    }
     final result = await showSectionDialog(context, section, item);
     if (result == null) return;
+    if (section.key == 'projects') {
+      result.fields.addAll({
+        'name': '',
+        'prj_type': '',
+        'role': '',
+        'technologies': '',
+        'start_date': '',
+        'end_date': '',
+        'description': '',
+      });
+    }
     try {
       if (item == null) {
         await widget.api.sectionCreate(
@@ -2235,89 +3013,6 @@ class _CandidateProfileScreenState extends State<CandidateProfileScreen> {
     }
   }
 
-  Future<void> _createResume() async {
-    final title = await showTextInputDialog(
-      context,
-      title: 'Tạo CV từ hồ sơ',
-      label: 'Tiêu đề CV',
-    );
-    if (title == null || title.trim().isEmpty) return;
-    final personal = asMap(_bundle['personal']);
-    final basic = {
-      'title': title.trim(),
-      'fullname': fullName(personal),
-      'gender': personal['gender'],
-      'dob': personal['dob'],
-      'phone': personal['phone'],
-      'email': personal['email'],
-      'address': personal['address'],
-      'link': personal['link'],
-      'avatar': personal['avatar'],
-      'objective': personal['objective'],
-      'personalTitle': 'Thông tin cá nhân',
-      'objectiveTitle': 'Mục tiêu nghề nghiệp',
-      'educationTitle': 'Học vấn',
-      'experienceTitle': 'Kinh nghiệm',
-      'projectTitle': 'Dự án',
-      'skillTitle': 'Kỹ năng',
-      'certificateTitle': 'Chứng chỉ',
-      'prizeTitle': 'Giải thưởng',
-      'activityTitle': 'Hoạt động',
-    };
-    try {
-      await widget.api.createResume({
-        'basicInfor': basic,
-        for (final section in profileSections)
-          section.key: listFromResponse(_bundle, key: section.key),
-      });
-      showSnack(context, 'Đã tạo CV.');
-      await _load();
-    } catch (error) {
-      showSnack(context, error.toString(), isError: true);
-    }
-  }
-
-  Future<void> _renameResume(Map<String, dynamic> resume) async {
-    final id = intValue(resume['id']);
-    if (id == null) return;
-    final title = await showTextInputDialog(
-      context,
-      title: 'Đổi tên CV',
-      label: 'Tiêu đề',
-      initialValue: textOf(resume['title']),
-    );
-    if (title == null || title.trim().isEmpty) return;
-    try {
-      final detail = await widget.api.resumeDetail(id);
-      final basic = asMap(detail['basicInfor'] ?? detail);
-      basic['title'] = title.trim();
-      await widget.api.updateResume({
-        'resume_id': id,
-        'basicInfor': basic,
-        for (final section in profileSections)
-          section.key: listFromResponse(detail, key: section.key),
-      });
-      showSnack(context, 'Đã đổi tên CV.');
-      await _load();
-    } catch (error) {
-      showSnack(context, error.toString(), isError: true);
-    }
-  }
-
-  Future<void> _deleteResume(Map<String, dynamic> resume) async {
-    final id = intValue(resume['id']);
-    if (id == null) return;
-    final ok = await confirmDialog(context, 'Xóa CV này?');
-    if (!ok) return;
-    try {
-      await widget.api.deleteResume(id);
-      showSnack(context, 'Đã xóa CV.');
-      await _load();
-    } catch (error) {
-      showSnack(context, error.toString(), isError: true);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final personal = asMap(_bundle['personal']);
@@ -2329,7 +3024,8 @@ class _CandidateProfileScreenState extends State<CandidateProfileScreen> {
           const PageIntro(
             eyebrow: 'Hồ sơ',
             title: 'Quản lý hồ sơ ứng viên',
-            subtitle: 'Cập nhật thông tin cá nhân, các mục năng lực và CV.',
+            subtitle:
+                'Cập nhật thông tin cá nhân và các mục năng lực. Khi ứng tuyển, hệ thống chỉ nhận CV PDF.',
           ),
           if (_loading)
             const LoadingList()
@@ -2383,50 +3079,6 @@ class _CandidateProfileScreenState extends State<CandidateProfileScreen> {
               ),
             ),
             const SizedBox(height: 12),
-            SectionHeader(
-              title: 'CV của tôi',
-              trailing: FilledButton.icon(
-                onPressed: _createResume,
-                icon: const Icon(Icons.add),
-                label: const Text('Tạo CV'),
-              ),
-            ),
-            if (_resumes.isEmpty)
-              const EmptyState(message: 'Chưa có CV nào.')
-            else
-              for (final resume in _resumes)
-                Card(
-                  child: ListTile(
-                    leading: const Icon(Icons.description_outlined),
-                    title: Text(textOf(resume['title'], 'CV chưa đặt tên')),
-                    subtitle: Text('Cập nhật: ${textOf(resume['updated_at'])}'),
-                    trailing: Wrap(
-                      children: [
-                        IconButton(
-                          tooltip: 'Xem',
-                          onPressed: () async {
-                            final id = intValue(resume['id']);
-                            if (id == null) return;
-                            final detail = await widget.api.resumeDetail(id);
-                            showResumeSheet(context, detail);
-                          },
-                          icon: const Icon(Icons.visibility_outlined),
-                        ),
-                        IconButton(
-                          tooltip: 'Đổi tên',
-                          onPressed: () => _renameResume(resume),
-                          icon: const Icon(Icons.edit_outlined),
-                        ),
-                        IconButton(
-                          tooltip: 'Xóa',
-                          onPressed: () => _deleteResume(resume),
-                          icon: const Icon(Icons.delete_outline),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-            const SizedBox(height: 12),
             for (final section in profileSections)
               ProfileSectionPanel(
                 section: section,
@@ -2465,11 +3117,13 @@ class _CandidateJobsScreenState extends State<CandidateJobsScreen>
   List<Map<String, dynamic>> _saved = [];
   bool _loading = true;
   String _error = '';
+  late int _seenCandidateJobsVersion;
 
   @override
   void initState() {
     super.initState();
     _tabs = TabController(length: 2, vsync: this);
+    _seenCandidateJobsVersion = widget.session.candidateJobsVersion;
     _load();
   }
 
@@ -2480,16 +3134,16 @@ class _CandidateJobsScreenState extends State<CandidateJobsScreen>
   }
 
   Future<void> _load() async {
-    final id = widget.session.currentId;
-    if (id == null) return;
+    if (!widget.session.isCandidate) return;
+    _seenCandidateJobsVersion = widget.session.candidateJobsVersion;
     setState(() {
       _loading = true;
       _error = '';
     });
     try {
       final results = await Future.wait([
-        widget.api.candidateAppliedJobs(id),
-        widget.api.candidateSavedJobs(id),
+        widget.api.candidateAppliedJobs(),
+        widget.api.candidateSavedJobs(),
       ]);
       setState(() {
         _applied = results[0];
@@ -2506,6 +3160,13 @@ class _CandidateJobsScreenState extends State<CandidateJobsScreen>
 
   @override
   Widget build(BuildContext context) {
+    if (_seenCandidateJobsVersion != widget.session.candidateJobsVersion) {
+      _seenCandidateJobsVersion = widget.session.candidateJobsVersion;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _load();
+      });
+    }
+
     return Column(
       children: [
         const Padding(
@@ -2553,14 +3214,47 @@ class _CandidateJobsScreenState extends State<CandidateJobsScreen>
                                     '${textOf(item['name'])}\n${applicationStatusText(textOf(item['status']))} - ${textOf(item['postDate'])}',
                                   ),
                                   isThreeLine: true,
-                                  trailing: IconButton(
-                                    icon: const Icon(Icons.open_in_new),
-                                    onPressed: () => launchExternal(
-                                      widget.config.resolveAssetUrl(
-                                        textOf(item['cv_link']),
-                                      ),
-                                    ),
-                                  ),
+                                  trailing:
+                                      textOf(item['cv_link']).isEmpty &&
+                                          intValue(item['resume_id']) == null
+                                      ? null
+                                      : IconButton(
+                                          tooltip: 'Mở CV đã nộp',
+                                          icon: const Icon(Icons.open_in_new),
+                                          onPressed: () async {
+                                            final cvLink = textOf(
+                                              item['cv_link'],
+                                            );
+                                            if (cvLink.isNotEmpty) {
+                                              await openPdfViewer(
+                                                context,
+                                                widget.config,
+                                                cvLink,
+                                                title: 'CV đã nộp',
+                                              );
+                                              return;
+                                            }
+                                            final resumeId = intValue(
+                                              item['resume_id'],
+                                            );
+                                            if (resumeId == null) return;
+                                            final detail = await widget.api
+                                                .resumeDetail(resumeId);
+                                            if (!context.mounted) return;
+                                            showResumeSheet(context, detail);
+                                          },
+                                        ),
+                                  onTap: () {
+                                    final jobId = intValue(item['id']) ?? 0;
+                                    if (jobId == 0) return;
+                                    showJobDetailSheet(
+                                      context,
+                                      api: widget.api,
+                                      session: widget.session,
+                                      config: widget.config,
+                                      jobId: jobId,
+                                    );
+                                  },
                                 ),
                               ),
                         ],
@@ -2653,7 +3347,7 @@ class _CandidateMessagesScreenState extends State<CandidateMessagesScreen> {
         content: SingleChildScrollView(child: Text(textOf(message['content']))),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => popDialogSafely<void>(context),
             child: const Text('Đóng'),
           ),
         ],
@@ -2790,18 +3484,51 @@ class _EmployerDashboardScreenState extends State<EmployerDashboardScreen> {
             ErrorPanel(message: _error, onRetry: _load)
           else ...[
             Card(
-              child: ListTile(
-                leading: const Icon(Icons.place_outlined),
-                title: Text(
-                  textOf(workspace['name'], textOf(employer['name'])),
-                ),
-                subtitle: Text(
-                  textOf(workspace['address'], 'Chưa cập nhật địa chỉ'),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                trailing: Chip(
-                  label: Text(textOf(widget.session.employerRole, 'employer')),
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(Icons.place_outlined),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                textOf(
+                                  workspace['name'],
+                                  textOf(employer['name']),
+                                ),
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              Text(
+                                textOf(
+                                  workspace['address'],
+                                  'Chưa cập nhật địa chỉ',
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Chip(
+                      label: Text(
+                        memberRoleText(
+                          textOf(widget.session.employerRole, 'employer'),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -2845,19 +3572,50 @@ class _EmployerDashboardScreenState extends State<EmployerDashboardScreen> {
               ),
               for (final branch in branchSummaries.take(5))
                 Card(
-                  child: ListTile(
-                    leading: Icon(
-                      boolValue(branch['is_headquarters'])
-                          ? Icons.domain_outlined
-                          : Icons.apartment_outlined,
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(
+                              boolValue(branch['is_headquarters'])
+                                  ? Icons.domain_outlined
+                                  : Icons.apartment_outlined,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    textOf(branch['name']),
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                  Text(
+                                    '${textOf(branch['active_jobs'], '0')} tin mở • ${textOf(branch['waiting_applications'], '0')} hồ sơ chờ • ${textOf(branch['total_members'], '0')} HR',
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Chip(
+                          label: Text(
+                            boolValue(branch['is_active'])
+                                ? 'Hoạt động'
+                                : 'Tạm khóa',
+                          ),
+                        ),
+                      ],
                     ),
-                    title: Text(textOf(branch['name'])),
-                    subtitle: Text(
-                      '${textOf(branch['active_jobs'], '0')} tin mở • ${textOf(branch['waiting_applications'], '0')} hồ sơ chờ • ${textOf(branch['total_members'], '0')} HR',
-                    ),
-                    trailing: boolValue(branch['is_active'])
-                        ? const Chip(label: Text('Hoạt động'))
-                        : const Chip(label: Text('Tạm khóa')),
                   ),
                 ),
             ],
@@ -2884,16 +3642,41 @@ class _EmployerDashboardScreenState extends State<EmployerDashboardScreen> {
             SectionHeader(title: 'Tin tuyển dụng hiệu quả'),
             for (final job in listFromResponse(_data, key: 'job_performance'))
               Card(
-                child: ListTile(
-                  leading: const Icon(Icons.trending_up),
-                  title: Text(textOf(job['jname'])),
-                  subtitle: Text(
-                    'Ứng tuyển: ${textOf(job['total_applications'], '0')}',
-                  ),
-                  trailing: Chip(
-                    label: Text(
-                      boolValue(job['is_active']) ? 'Đang mở' : 'Đã tắt',
-                    ),
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(Icons.trending_up),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  textOf(job['jname']),
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                                Text(
+                                  'Ứng tuyển: ${textOf(job['total_applications'], '0')}',
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Chip(
+                        label: Text(
+                          boolValue(job['is_active']) ? 'Đang mở' : 'Đã tắt',
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -3057,19 +3840,20 @@ class _EmployerProfileScreenState extends State<EmployerProfileScreen> {
                     const SizedBox(height: 12),
                     Wrap(
                       spacing: 8,
+                      runSpacing: 8,
                       children: [
-                        Chip(
-                          label: Text(
-                            'Liên hệ: ${textOf(_employer['contact_name'], 'Chưa có')}',
-                          ),
+                        InfoPill(
+                          icon: Icons.person_outline,
+                          text:
+                              'Liên hệ: ${textOf(_employer['contact_name'], 'Chưa có')}',
                         ),
-                        Chip(
-                          label: Text(
-                            'SĐT: ${textOf(_employer['phone'], 'Chưa có')}',
-                          ),
+                        InfoPill(
+                          icon: Icons.call_outlined,
+                          text: 'SĐT: ${textOf(_employer['phone'], 'Chưa có')}',
                         ),
-                        Chip(
-                          label: Text('Quy mô: ${employeeRange(_employer)}'),
+                        InfoPill(
+                          icon: Icons.groups_outlined,
+                          text: 'Quy mô: ${employeeRange(_employer)}',
                         ),
                       ],
                     ),
@@ -3160,15 +3944,21 @@ class _EmployerBranchesScreenState extends State<EmployerBranchesScreen> {
     if (id == null) return;
     final ok = await confirmDialog(
       context,
-      'Ngừng hoạt động chi nhánh "${textOf(branch['name'])}"?',
+      'Xóa chi nhánh "${textOf(branch['name'])}"? Tất cả tin tuyển, hồ sơ ứng tuyển, HR và quản lý chi nhánh thuộc chi nhánh này sẽ bị xóa.',
     );
     if (!ok) return;
     try {
+      setState(() {
+        _branches = _branches
+            .where((item) => intValue(item['id']) != id)
+            .toList();
+      });
       await widget.api.deleteBranch(id);
-      showSnack(context, 'Đã ngừng hoạt động chi nhánh.');
+      showSnack(context, 'Đã xóa chi nhánh và dữ liệu liên quan.');
       await _load();
     } catch (error) {
       showSnack(context, error.toString(), isError: true);
+      await _load();
     }
   }
 
@@ -3214,34 +4004,76 @@ class _EmployerBranchesScreenState extends State<EmployerBranchesScreen> {
           else
             for (final branch in _branches)
               Card(
-                child: ListTile(
-                  leading: Icon(
-                    boolValue(branch['is_headquarters'])
-                        ? Icons.domain_outlined
-                        : Icons.apartment_outlined,
-                  ),
-                  title: Text(
-                    textOf(branch['name']),
-                    style: const TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                  subtitle: Text(
-                    '${textOf(branch['address'], 'Chưa có địa chỉ')}\n${textOf(branch['contact_name'], 'Chưa có liên hệ')} • ${textOf(branch['phone'], 'Chưa có SĐT')}',
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  isThreeLine: true,
-                  trailing: Wrap(
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (canUpdate)
-                        IconButton(
-                          onPressed: () => _upsert(branch),
-                          icon: const Icon(Icons.edit_location_alt_outlined),
-                        ),
-                      if (canDelete && !boolValue(branch['is_headquarters']))
-                        IconButton(
-                          onPressed: () => _delete(branch),
-                          icon: const Icon(Icons.block_outlined),
-                        ),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(
+                            boolValue(branch['is_headquarters'])
+                                ? Icons.domain_outlined
+                                : Icons.apartment_outlined,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  textOf(branch['name']),
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  textOf(branch['address'], 'Chưa có địa chỉ'),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                Text(
+                                  '${textOf(branch['contact_name'], 'Chưa có liên hệ')} • ${textOf(branch['phone'], 'Chưa có SĐT')}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      ResponsiveButtonGroup(
+                        alignment: WrapAlignment.end,
+                        stretchBelow: 320,
+                        children: [
+                          Chip(
+                            label: Text(
+                              boolValue(branch['is_active'])
+                                  ? 'Hoạt động'
+                                  : 'Tạm khóa',
+                            ),
+                          ),
+                          if (canUpdate)
+                            OutlinedButton.icon(
+                              onPressed: () => _upsert(branch),
+                              icon: const Icon(
+                                Icons.edit_location_alt_outlined,
+                              ),
+                              label: const Text('Sửa'),
+                            ),
+                          if (canDelete &&
+                              !boolValue(branch['is_headquarters']))
+                            OutlinedButton.icon(
+                              onPressed: () => _delete(branch),
+                              icon: const Icon(Icons.delete_outline),
+                              label: const Text('Xóa'),
+                            ),
+                        ],
+                      ),
                     ],
                   ),
                 ),
@@ -3343,7 +4175,10 @@ class _EmployerMembersScreenState extends State<EmployerMembersScreen> {
     if (id == null || !boolValue(_permissions['lock_members'])) return;
     try {
       if (locked) {
-        await widget.api.lockMember(id);
+        await widget.api.updateMember(id, {
+          'status': 'inactive',
+          'is_active': false,
+        });
         showSnack(context, 'Đã khóa tài khoản.');
       } else {
         await widget.api.updateMember(id, {
@@ -3355,6 +4190,30 @@ class _EmployerMembersScreenState extends State<EmployerMembersScreen> {
       await _load();
     } catch (error) {
       showSnack(context, error.toString(), isError: true);
+    }
+  }
+
+  Future<void> _delete(Map<String, dynamic> member) async {
+    final id = intValue(member['id']);
+    if (id == null || !boolValue(_permissions['lock_members'])) return;
+    if (textOf(member['role']) == 'company_owner') return;
+    final ok = await confirmDialog(
+      context,
+      'Xóa tài khoản "${textOf(member['name'], textOf(asMap(member['user'])['email']))}" khỏi công ty? Tài khoản đăng nhập này sẽ bị xóa.',
+    );
+    if (!ok) return;
+    try {
+      setState(() {
+        _members = _members
+            .where((item) => intValue(item['id']) != id)
+            .toList();
+      });
+      await widget.api.deleteMember(id);
+      showSnack(context, 'Đã xóa tài khoản.');
+      await _load();
+    } catch (error) {
+      showSnack(context, error.toString(), isError: true);
+      await _load();
     }
   }
 
@@ -3377,9 +4236,9 @@ class _EmployerMembersScreenState extends State<EmployerMembersScreen> {
         children: [
           PageIntro(
             eyebrow: 'Phân quyền',
-            title: 'Tài khoản HR',
+            title: 'Nhân sự chi nhánh',
             subtitle:
-                'Company owner quản lý toàn công ty, branch manager chỉ quản lý HR thuộc chi nhánh mình.',
+                'Company owner quản lý branch manager và HR; branch manager chỉ quản lý HR trong chi nhánh mình.',
             trailing: canCreate
                 ? FilledButton.icon(
                     onPressed: () => _upsert(),
@@ -3399,45 +4258,100 @@ class _EmployerMembersScreenState extends State<EmployerMembersScreen> {
           else
             for (final member in _members)
               Card(
-                child: ListTile(
-                  leading: const Icon(Icons.badge_outlined),
-                  title: Text(
-                    textOf(
-                      member['name'],
-                      textOf(asMap(member['user'])['email']),
-                    ),
-                    style: const TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                  subtitle: Text(
-                    '${memberRoleText(textOf(member['role']))} • ${textOf(asMap(member['branch'])['name'], 'Toàn công ty')}\n${textOf(asMap(member['user'])['email'])} • ${textOf(member['phone'], 'Chưa có SĐT')}',
-                  ),
-                  isThreeLine: true,
-                  trailing: Wrap(
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Chip(
-                        label: Text(
-                          textOf(member['status']) == 'inactive'
-                              ? 'Đã khóa'
-                              : 'Hoạt động',
-                        ),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(Icons.badge_outlined),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  textOf(
+                                    member['name'],
+                                    textOf(asMap(member['user'])['email']),
+                                  ),
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  memberRoleText(textOf(member['role'])),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                Text(
+                                  textOf(
+                                    asMap(member['branch'])['name'],
+                                    'Toàn công ty',
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                                Text(
+                                  '${textOf(asMap(member['user'])['email'])} • ${textOf(member['phone'], 'Chưa có SĐT')}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
-                      if (canUpdate)
-                        IconButton(
-                          onPressed: () => _upsert(member),
-                          icon: const Icon(Icons.edit_outlined),
-                        ),
-                      if (canLock && textOf(member['role']) != 'company_owner')
-                        IconButton(
-                          onPressed: () => _setLocked(
-                            member,
-                            textOf(member['status']) != 'inactive',
+                      const SizedBox(height: 10),
+                      ResponsiveButtonGroup(
+                        alignment: WrapAlignment.end,
+                        stretchBelow: 320,
+                        children: [
+                          Chip(
+                            label: Text(
+                              textOf(member['status']) == 'inactive'
+                                  ? 'Đã khóa'
+                                  : 'Hoạt động',
+                            ),
                           ),
-                          icon: Icon(
-                            textOf(member['status']) == 'inactive'
-                                ? Icons.lock_open_outlined
-                                : Icons.lock_outline,
-                          ),
-                        ),
+                          if (canUpdate)
+                            OutlinedButton.icon(
+                              onPressed: () => _upsert(member),
+                              icon: const Icon(Icons.edit_outlined),
+                              label: const Text('Sửa'),
+                            ),
+                          if (canLock &&
+                              textOf(member['role']) != 'company_owner')
+                            OutlinedButton.icon(
+                              onPressed: () => _setLocked(
+                                member,
+                                textOf(member['status']) != 'inactive',
+                              ),
+                              icon: Icon(
+                                textOf(member['status']) == 'inactive'
+                                    ? Icons.lock_open_outlined
+                                    : Icons.lock_outline,
+                              ),
+                              label: Text(
+                                textOf(member['status']) == 'inactive'
+                                    ? 'Mở khóa'
+                                    : 'Khóa',
+                              ),
+                            ),
+                          if (canLock &&
+                              textOf(member['role']) != 'company_owner')
+                            OutlinedButton.icon(
+                              onPressed: () => _delete(member),
+                              icon: const Icon(Icons.delete_outline),
+                              label: const Text('Xóa'),
+                            ),
+                        ],
+                      ),
                     ],
                   ),
                 ),
@@ -3566,19 +4480,38 @@ class _EmployerBillingScreenState extends State<EmployerBillingScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              textOf(plan['name']),
-                              style: Theme.of(context).textTheme.titleLarge
-                                  ?.copyWith(fontWeight: FontWeight.w900),
-                            ),
-                          ),
-                          if (textOf(current['plan_key']) ==
-                              textOf(plan['key']))
-                            const Chip(label: Text('Đang dùng')),
-                        ],
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          final title = Text(
+                            textOf(plan['name']),
+                            softWrap: true,
+                            style: Theme.of(context).textTheme.titleLarge
+                                ?.copyWith(fontWeight: FontWeight.w900),
+                          );
+                          final active =
+                              textOf(current['plan_key']) == textOf(plan['key'])
+                              ? const Chip(label: Text('Đang dùng'))
+                              : null;
+                          if (active != null && constraints.maxWidth < 360) {
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                title,
+                                const SizedBox(height: 6),
+                                active,
+                              ],
+                            );
+                          }
+                          return Row(
+                            children: [
+                              Expanded(child: title),
+                              if (active != null) ...[
+                                const SizedBox(width: 8),
+                                active,
+                              ],
+                            ],
+                          );
+                        },
                       ),
                       const SizedBox(height: 8),
                       Text(
@@ -3701,6 +4634,19 @@ class _EmployerJobsScreenState extends State<EmployerJobsScreen> {
   }
 
   Future<void> _upsert([Map<String, dynamic>? job]) async {
+    try {
+      final employerPayload = await widget.api.employerMe();
+      await widget.session.updateUser({
+        ...widget.session.user,
+        ...employerPayload,
+      });
+      setState(() {
+        _permissions = asMap(employerPayload['permissions']);
+        _branches = listFromResponse(employerPayload, key: 'branches');
+      });
+    } catch (_) {
+      // The dialog will still use the latest loaded reference data.
+    }
     List<Map<String, dynamic>> selectedSkills = [];
     if (job != null) {
       final id = intValue(job['id']);
@@ -3747,6 +4693,27 @@ class _EmployerJobsScreenState extends State<EmployerJobsScreen> {
     }
   }
 
+  Future<void> _delete(Map<String, dynamic> job) async {
+    final id = intValue(job['id']);
+    if (id == null) return;
+    final ok = await confirmDialog(
+      context,
+      'Xóa tin "${textOf(job['jname'])}"? Hồ sơ ứng tuyển, tin nhắn và dữ liệu liên quan của tin này sẽ bị xóa.',
+    );
+    if (!ok) return;
+    try {
+      setState(() {
+        _jobs = _jobs.where((item) => intValue(item['id']) != id).toList();
+      });
+      await widget.api.deleteJob(id);
+      showSnack(context, 'Đã xóa tin tuyển dụng.');
+      await _load();
+    } catch (error) {
+      showSnack(context, error.toString(), isError: true);
+      await _load();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final canManage =
@@ -3787,36 +4754,85 @@ class _EmployerJobsScreenState extends State<EmployerJobsScreen> {
           else
             for (final job in _jobs)
               Card(
-                child: ListTile(
-                  title: Text(
-                    textOf(job['jname']),
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  subtitle: Text(
-                    '${textOf(job['jtype_name'])} • ${textOf(job['jlevel_name'])} • ${textOf(asMap(job['branch'])['name'], 'Chưa gắn chi nhánh')}\nHạn: ${textOf(job['deadline'], textOf(job['expire_at']))}',
-                  ),
-                  isThreeLine: true,
-                  leading: const Icon(Icons.work_outline),
-                  trailing: canManage
-                      ? Wrap(
-                          children: [
-                            Switch(
-                              value: boolValue(job['is_active']),
-                              onChanged: (_) => _toggle(job),
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(Icons.work_outline),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  textOf(job['jname']),
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  '${textOf(job['jtype_name'])} • ${textOf(job['jlevel_name'])}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                Text(
+                                  '${textOf(asMap(job['branch'])['name'], 'Chưa gắn chi nhánh')} • Hạn: ${textOf(job['deadline'], textOf(job['expire_at']))}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                              ],
                             ),
-                            IconButton(
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      if (canManage)
+                        ResponsiveButtonGroup(
+                          alignment: WrapAlignment.end,
+                          stretchBelow: 320,
+                          children: [
+                            FilterChip(
+                              label: Text(
+                                boolValue(job['is_active'])
+                                    ? 'Đang mở'
+                                    : 'Tạm dừng',
+                              ),
+                              selected: boolValue(job['is_active']),
+                              onSelected: (_) => _toggle(job),
+                              avatar: Icon(
+                                boolValue(job['is_active'])
+                                    ? Icons.toggle_on_outlined
+                                    : Icons.toggle_off_outlined,
+                              ),
+                            ),
+                            OutlinedButton.icon(
                               onPressed: () => _upsert(job),
                               icon: const Icon(Icons.edit_outlined),
+                              label: const Text('Sửa tin'),
+                            ),
+                            OutlinedButton.icon(
+                              onPressed: () => _delete(job),
+                              icon: const Icon(Icons.delete_outline),
+                              label: const Text('Xóa'),
                             ),
                           ],
                         )
-                      : Chip(
+                      else
+                        Chip(
                           label: Text(
                             boolValue(job['is_active'])
                                 ? 'Đang mở'
                                 : 'Tạm dừng',
                           ),
                         ),
+                    ],
+                  ),
                 ),
               ),
         ],
@@ -3826,9 +4842,14 @@ class _EmployerJobsScreenState extends State<EmployerJobsScreen> {
 }
 
 class EmployerApplicationsScreen extends StatefulWidget {
-  const EmployerApplicationsScreen({super.key, required this.api});
+  const EmployerApplicationsScreen({
+    super.key,
+    required this.api,
+    required this.config,
+  });
 
   final RecruitmentApi api;
+  final ApiConfig config;
 
   @override
   State<EmployerApplicationsScreen> createState() =>
@@ -3887,8 +4908,27 @@ class _EmployerApplicationsScreenState
   Future<void> _process(Map<String, dynamic> candidate, String actType) async {
     if (actType == 'VIEWED') {
       try {
-        await widget.api.processApplying({...candidate, 'actType': 'VIEWED'});
-        await launchExternal(textOf(candidate['cv_link']));
+        if (textOf(candidate['status']) == 'WAITING') {
+          await widget.api.processApplying({...candidate, 'actType': 'VIEWED'});
+        }
+        final cvLink = textOf(candidate['cv_link']);
+        if (cvLink.isNotEmpty) {
+          await openPdfViewer(
+            context,
+            widget.config,
+            cvLink,
+            title: 'CV ${fullName(candidate)}',
+          );
+        } else {
+          final resumeId = intValue(candidate['resume_id']);
+          if (resumeId != null) {
+            final detail = await widget.api.employerResumeDetail(resumeId);
+            if (!context.mounted) return;
+            showResumeSheet(context, detail);
+          } else {
+            showSnack(context, 'Hồ sơ này chưa có CV để xem.', isError: true);
+          }
+        }
         await _load();
       } catch (error) {
         showSnack(context, error.toString(), isError: true);
@@ -3902,15 +4942,27 @@ class _EmployerApplicationsScreenState
       _status,
     );
     if (message == null) return;
+    final beforeItems = [..._items];
+    final jobId = intValue(candidate['job_id']);
+    final candidateId = intValue(candidate['candidate_id'] ?? candidate['id']);
     try {
+      setState(() {
+        _items = _items.where((item) {
+          final sameJob = intValue(item['job_id']) == jobId;
+          final sameCandidate =
+              intValue(item['candidate_id'] ?? item['id']) == candidateId;
+          return !(sameJob && sameCandidate);
+        }).toList();
+      });
+      showSnack(context, 'Đã chuyển hồ sơ sang giai đoạn mới.');
       await widget.api.processApplying({
         ...candidate,
         ...message,
         'actType': actType,
       });
-      showSnack(context, 'Đã xử lý hồ sơ.');
       await _load();
     } catch (error) {
+      if (mounted) setState(() => _items = beforeItems);
       showSnack(context, error.toString(), isError: true);
     }
   }
@@ -4115,8 +5167,8 @@ class _EmployerTalentScreenState extends State<EmployerTalentScreen> {
     );
     if (result == null) return;
     try {
+      showSnack(context, 'Đã ghi nhận yêu cầu liên hệ ứng viên.');
       await widget.api.contactCandidate(result);
-      showSnack(context, 'Đã gửi liên hệ ứng viên.');
     } catch (error) {
       showSnack(context, error.toString(), isError: true);
     }
@@ -4145,87 +5197,73 @@ class _EmployerTalentScreenState extends State<EmployerTalentScreen> {
                     decoration: const InputDecoration(labelText: 'Từ khóa'),
                   ),
                   const SizedBox(height: 10),
-                  Row(
+                  ResponsiveFormRow(
                     children: [
-                      Expanded(
-                        child: DropdownButtonFormField<String>(
-                          initialValue: _gender,
-                          decoration: const InputDecoration(
-                            labelText: 'Giới tính',
-                          ),
-                          items: const [
-                            DropdownMenuItem(value: '', child: Text('Tất cả')),
-                            DropdownMenuItem(value: '1', child: Text('Nam')),
-                            DropdownMenuItem(value: '0', child: Text('Nữ')),
-                          ],
-                          onChanged: (value) =>
-                              setState(() => _gender = value ?? ''),
+                      DropdownButtonFormField<String>(
+                        initialValue: _gender,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Giới tính',
                         ),
+                        items: const [
+                          DropdownMenuItem(value: '', child: Text('Tất cả')),
+                          DropdownMenuItem(value: '1', child: Text('Nam')),
+                          DropdownMenuItem(value: '0', child: Text('Nữ')),
+                        ],
+                        onChanged: (value) =>
+                            setState(() => _gender = value ?? ''),
                       ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: DropdownButtonFormField<String>(
-                          initialValue: _jobId,
-                          decoration: const InputDecoration(
-                            labelText: 'Job liên hệ',
+                      DropdownButtonFormField<String>(
+                        initialValue: _jobId,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Job liên hệ',
+                        ),
+                        items: [
+                          const DropdownMenuItem(
+                            value: '',
+                            child: Text('Chọn job'),
                           ),
-                          items: [
-                            const DropdownMenuItem(
-                              value: '',
-                              child: Text('Chọn job'),
-                            ),
-                            for (final job in _jobs)
-                              DropdownMenuItem(
-                                value: textOf(job['id']),
-                                child: Text(textOf(job['jname'])),
+                          for (final job in _jobs)
+                            DropdownMenuItem(
+                              value: textOf(job['id']),
+                              child: Text(
+                                textOf(job['jname']),
+                                overflow: TextOverflow.ellipsis,
                               ),
-                          ],
-                          onChanged: (value) =>
-                              setState(() => _jobId = value ?? ''),
-                        ),
+                            ),
+                        ],
+                        onChanged: (value) =>
+                            setState(() => _jobId = value ?? ''),
                       ),
                     ],
                   ),
                   const SizedBox(height: 10),
-                  Row(
+                  ResponsiveFormRow(
                     children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _address,
-                          decoration: const InputDecoration(
-                            labelText: 'Khu vực',
-                          ),
-                        ),
+                      TextField(
+                        controller: _address,
+                        decoration: const InputDecoration(labelText: 'Khu vực'),
                       ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: TextField(
-                          controller: _school,
-                          decoration: const InputDecoration(
-                            labelText: 'Trường',
-                          ),
-                        ),
+                      TextField(
+                        controller: _school,
+                        decoration: const InputDecoration(labelText: 'Trường'),
                       ),
                     ],
                   ),
                   const SizedBox(height: 10),
-                  Row(
+                  ResponsiveFormRow(
                     children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _major,
-                          decoration: const InputDecoration(
-                            labelText: 'Chuyên ngành',
-                          ),
+                      TextField(
+                        controller: _major,
+                        decoration: const InputDecoration(
+                          labelText: 'Chuyên ngành',
                         ),
                       ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: TextField(
-                          controller: _experience,
-                          decoration: const InputDecoration(
-                            labelText: 'Kinh nghiệm',
-                          ),
+                      TextField(
+                        controller: _experience,
+                        decoration: const InputDecoration(
+                          labelText: 'Kinh nghiệm',
                         ),
                       ),
                     ],
@@ -4360,41 +5398,70 @@ class PageIntro extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          Expanded(
-            child: Column(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final textBlock = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                eyebrow.toUpperCase(),
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: Theme.of(context).colorScheme.primary,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                title,
+                softWrap: true,
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.w900,
+                  color: const Color(0xFF102A27),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                subtitle,
+                softWrap: true,
+                style: Theme.of(
+                  context,
+                ).textTheme.bodyMedium?.copyWith(color: Colors.black54),
+              ),
+            ],
+          );
+          if (trailing != null && constraints.maxWidth < 560) {
+            return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  eyebrow.toUpperCase(),
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: Theme.of(context).colorScheme.primary,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 0,
+                textBlock,
+                const SizedBox(height: 10),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: constraints.maxWidth),
+                    child: trailing!,
                   ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  title,
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.w900,
-                    color: const Color(0xFF102A27),
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  subtitle,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodyMedium?.copyWith(color: Colors.black54),
                 ),
               ],
-            ),
-          ),
-          if (trailing != null) ...[const SizedBox(width: 12), trailing!],
-        ],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(child: textBlock),
+              if (trailing != null) ...[
+                const SizedBox(width: 12),
+                Flexible(
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: trailing!,
+                  ),
+                ),
+              ],
+            ],
+          );
+        },
       ),
     );
   }
@@ -4416,31 +5483,123 @@ class SectionHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final textBlock = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                softWrap: true,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+              ),
+              if (subtitle != null)
                 Text(
-                  title,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w800,
-                  ),
+                  subtitle!,
+                  softWrap: true,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: Colors.black54),
                 ),
-                if (subtitle != null)
-                  Text(
-                    subtitle!,
-                    style: Theme.of(
-                      context,
-                    ).textTheme.bodySmall?.copyWith(color: Colors.black54),
-                  ),
-              ],
-            ),
-          ),
-          ?trailing,
-        ],
+            ],
+          );
+          if (trailing != null && constraints.maxWidth < 460) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [textBlock, const SizedBox(height: 8), trailing!],
+            );
+          }
+          return Row(
+            children: [
+              Expanded(child: textBlock),
+              ?trailing,
+            ],
+          );
+        },
       ),
+    );
+  }
+}
+
+class ResponsiveFormRow extends StatelessWidget {
+  const ResponsiveFormRow({
+    super.key,
+    required this.children,
+    this.spacing = 10,
+    this.minChildWidth = 180,
+  });
+
+  final List<Widget> children;
+  final double spacing;
+  final double minChildWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final shouldStack =
+            constraints.maxWidth < (children.length * minChildWidth) ||
+            constraints.maxWidth.isInfinite;
+        if (shouldStack) {
+          return Column(
+            children: [
+              for (var index = 0; index < children.length; index++) ...[
+                if (index > 0) SizedBox(height: spacing),
+                children[index],
+              ],
+            ],
+          );
+        }
+        return Row(
+          children: [
+            for (var index = 0; index < children.length; index++) ...[
+              if (index > 0) SizedBox(width: spacing),
+              Expanded(child: children[index]),
+            ],
+          ],
+        );
+      },
+    );
+  }
+}
+
+class ResponsiveButtonGroup extends StatelessWidget {
+  const ResponsiveButtonGroup({
+    super.key,
+    required this.children,
+    this.spacing = 8,
+    this.runSpacing = 8,
+    this.stretchBelow = 380,
+    this.alignment = WrapAlignment.start,
+  });
+
+  final List<Widget> children;
+  final double spacing;
+  final double runSpacing;
+  final double stretchBelow;
+  final WrapAlignment alignment;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final shouldStretch =
+            constraints.maxWidth.isFinite &&
+            constraints.maxWidth < stretchBelow;
+        return Wrap(
+          spacing: spacing,
+          runSpacing: runSpacing,
+          alignment: alignment,
+          children: [
+            for (final child in children)
+              shouldStretch
+                  ? SizedBox(width: constraints.maxWidth, child: child)
+                  : child,
+          ],
+        );
+      },
     );
   }
 }
@@ -4547,7 +5706,18 @@ class JobCard extends StatelessWidget {
                       ],
                     ),
                   ),
-                  if (boolValue(job['is_hot'])) const Chip(label: Text('HOT')),
+                  if (boolValue(job['is_hot']))
+                    const Chip(
+                      backgroundColor: Color(0xFFFFF1E6),
+                      side: BorderSide(color: Color(0xFFF59E0B)),
+                      label: Text(
+                        'HOT',
+                        style: TextStyle(
+                          color: Color(0xFF92400E),
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
                 ],
               ),
               const SizedBox(height: 12),
@@ -4663,19 +5833,27 @@ class InfoPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-      decoration: BoxDecoration(
-        color: const Color(0xFFEFF7F4),
-        borderRadius: BorderRadius.circular(99),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 15, color: Theme.of(context).colorScheme.primary),
-          const SizedBox(width: 5),
-          Flexible(child: Text(text, overflow: TextOverflow.ellipsis)),
-        ],
+    final maxPillWidth = (MediaQuery.sizeOf(context).width - 56)
+        .clamp(160.0, 520.0)
+        .toDouble();
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: maxPillWidth),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color: const Color(0xFFEFF7F4),
+          borderRadius: BorderRadius.circular(99),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 15, color: Theme.of(context).colorScheme.primary),
+            const SizedBox(width: 5),
+            Flexible(
+              child: Text(text, maxLines: 1, overflow: TextOverflow.ellipsis),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -4813,7 +5991,8 @@ class ProfileSectionPanel extends StatelessWidget {
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
-                trailing: Wrap(
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     IconButton(
                       onPressed: () => onEdit(item),
@@ -4854,34 +6033,57 @@ class CandidateApplicationCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        fullName(item),
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w800,
-                          fontSize: 16,
-                        ),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final info = Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      fullName(item),
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 16,
                       ),
-                      Text(textOf(item['jname'])),
-                      Text(
-                        '${textOf(item['email'])} • ${textOf(item['phone'], 'Chưa có SĐT')}',
-                      ),
-                    ],
-                  ),
-                ),
-                Chip(
+                    ),
+                    Text(
+                      textOf(item['jname']),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    Text(
+                      '${textOf(item['email'])} • ${textOf(item['phone'], 'Chưa có SĐT')}',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                );
+                final status = Chip(
                   label: Text(applicationStatusText(textOf(item['status']))),
-                ),
-              ],
+                );
+                if (constraints.maxWidth < 390) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [info, const SizedBox(height: 8), status],
+                  );
+                }
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: info),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: status,
+                      ),
+                    ),
+                  ],
+                );
+              },
             ),
             const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
+            ResponsiveButtonGroup(
+              stretchBelow: 420,
               children: [
                 OutlinedButton.icon(
                   onPressed: onView,
@@ -4938,34 +6140,61 @@ class CandidateTalentCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                AppAvatar(
-                  url: config.resolveAssetUrl(textOf(candidate['avatar'])),
-                  label: fullName(candidate),
-                  radius: 28,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final identity = Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    AppAvatar(
+                      url: config.resolveAssetUrl(textOf(candidate['avatar'])),
+                      label: fullName(candidate),
+                      radius: 28,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            fullName(candidate),
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w800,
+                              fontSize: 16,
+                            ),
+                          ),
+                          Text(
+                            subtitle ??
+                                '${textOf(candidate['email'])} • ${textOf(candidate['phone'], 'Chưa có SĐT')}',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
+                if (badge == null) return identity;
+                final badgeChip = Chip(label: Text(badge!));
+                if (constraints.maxWidth < 390) {
+                  return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        fullName(candidate),
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w800,
-                          fontSize: 16,
-                        ),
+                    children: [identity, const SizedBox(height: 8), badgeChip],
+                  );
+                }
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: identity),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: badgeChip,
                       ),
-                      Text(
-                        subtitle ??
-                            '${textOf(candidate['email'])} • ${textOf(candidate['phone'], 'Chưa có SĐT')}',
-                      ),
-                    ],
-                  ),
-                ),
-                if (badge != null) Chip(label: Text(badge!)),
-              ],
+                    ),
+                  ],
+                );
+              },
             ),
             if (textOf(candidate['objective']).isNotEmpty) ...[
               const SizedBox(height: 8),
@@ -5000,13 +6229,16 @@ class CandidateTalentCard extends StatelessWidget {
               ),
             ],
             const SizedBox(height: 8),
-            Align(
-              alignment: Alignment.centerRight,
-              child: FilledButton.icon(
-                onPressed: onContact,
-                icon: const Icon(Icons.mail_outline),
-                label: const Text('Liên hệ'),
-              ),
+            ResponsiveButtonGroup(
+              alignment: WrapAlignment.end,
+              stretchBelow: 320,
+              children: [
+                FilledButton.icon(
+                  onPressed: onContact,
+                  icon: const Icon(Icons.mail_outline),
+                  label: const Text('Liên hệ'),
+                ),
+              ],
             ),
           ],
         ),
@@ -5035,30 +6267,31 @@ Future<void> showJobDetailSheet(
         else
           Future.value(false),
         if (session.isCandidate) api.checkSaved(jobId) else Future.value(false),
-        if (session.isCandidate)
-          api.resumes()
-        else
-          Future.value(<Map<String, dynamic>>[]),
       ]),
       builder: (context, snapshot) {
-        if (!snapshot.hasData) {
-          return const SizedBox(
-            height: 260,
-            child: Center(child: CircularProgressIndicator()),
-          );
-        }
         if (snapshot.hasError) {
           return Padding(
             padding: const EdgeInsets.all(24),
             child: Text(snapshot.error.toString()),
           );
         }
+        if (!snapshot.hasData) {
+          return const SizedBox(
+            height: 260,
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
         final job = asMap(snapshot.data![0]);
         final branch = asMap(job['branch']);
         final skills = snapshot.data![1] as List<Map<String, dynamic>>;
+        final jobLat = double.tryParse(textOf(job['map_lat']));
+        final jobLng = double.tryParse(textOf(job['map_lng']));
+        final branchLat = double.tryParse(textOf(branch['map_lat']));
+        final branchLng = double.tryParse(textOf(branch['map_lng']));
+        final locationLat = jobLat ?? branchLat;
+        final locationLng = jobLng ?? branchLng;
         var applied = snapshot.data![2] as bool;
         var saved = snapshot.data![3] as bool;
-        final resumes = snapshot.data![4] as List<Map<String, dynamic>>;
         return StatefulBuilder(
           builder: (context, setSheetState) => DraggableScrollableSheet(
             expand: false,
@@ -5104,6 +6337,18 @@ Future<void> showJobDetailSheet(
                   ],
                 ),
                 const SizedBox(height: 12),
+                if (locationLat != null && locationLng != null) ...[
+                  OutlinedButton.icon(
+                    onPressed: () => openMapLocation(
+                      lat: locationLat,
+                      lng: locationLng,
+                      label: textOf(branch['name'], textOf(job['jname'])),
+                    ),
+                    icon: const Icon(Icons.map_outlined),
+                    label: const Text('Xem vị trí trên Google Maps'),
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 if (skills.isNotEmpty)
                   Wrap(
                     spacing: 6,
@@ -5128,6 +6373,7 @@ Future<void> showJobDetailSheet(
                             try {
                               await api.setSavedJob(jobId, !saved);
                               setSheetState(() => saved = !saved);
+                              session.markCandidateJobsChanged();
                             } catch (error) {
                               showSnack(
                                 context,
@@ -5152,15 +6398,34 @@ Future<void> showJobDetailSheet(
                                     context,
                                     api,
                                     jobId,
-                                    resumes,
+                                    companyName: textOf(
+                                      asMap(job['employer'])['name'],
+                                      'nhà tuyển dụng',
+                                    ),
                                   );
                                   if (success) {
                                     setSheetState(() => applied = true);
+                                    session.markCandidateJobsChanged();
                                   }
                                 },
                           icon: const Icon(Icons.send_outlined),
                           label: Text(applied ? 'Đã ứng tuyển' : 'Ứng tuyển'),
                         ),
+                      ),
+                    ],
+                  )
+                else if (!session.isAuthenticated)
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text(
+                        'Đăng nhập bằng tài khoản ứng viên để lưu việc hoặc ứng tuyển.',
+                      ),
+                      const SizedBox(height: 10),
+                      FilledButton.icon(
+                        onPressed: () => Navigator.pop(context),
+                        icon: const Icon(Icons.login),
+                        label: const Text('Đã hiểu'),
                       ),
                     ],
                   )
@@ -5180,21 +6445,40 @@ Future<void> showJobDetailSheet(
 }
 
 Future<void> showCompanyDetailSheet(
-  BuildContext context,
+  BuildContext parentContext,
   RecruitmentApi api,
+  AuthSession session,
   ApiConfig config,
   int companyId,
 ) async {
   if (companyId == 0) return;
   showModalBottomSheet<void>(
-    context: context,
+    context: parentContext,
     isScrollControlled: true,
-    builder: (context) => FutureBuilder<List<dynamic>>(
+    builder: (sheetContext) => FutureBuilder<List<dynamic>>(
       future: Future.wait([
         api.companyDetail(companyId),
         api.companyJobs(companyId),
       ]),
       builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return Padding(
+            padding: const EdgeInsets.all(24),
+            child: ErrorPanel(
+              message: snapshot.error.toString(),
+              onRetry: () {
+                Navigator.of(sheetContext).pop();
+                showCompanyDetailSheet(
+                  parentContext,
+                  api,
+                  session,
+                  config,
+                  companyId,
+                );
+              },
+            ),
+          );
+        }
         if (!snapshot.hasData) {
           return const SizedBox(
             height: 260,
@@ -5203,6 +6487,8 @@ Future<void> showCompanyDetailSheet(
         }
         final company = asMap(snapshot.data![0]);
         final jobs = snapshot.data![1] as List<Map<String, dynamic>>;
+        final companyLat = double.tryParse(textOf(company['map_lat']));
+        final companyLng = double.tryParse(textOf(company['map_lng']));
         return DraggableScrollableSheet(
           expand: false,
           initialChildSize: 0.85,
@@ -5226,14 +6512,31 @@ Future<void> showCompanyDetailSheet(
               const SizedBox(height: 6),
               Text(textOf(company['address']), textAlign: TextAlign.center),
               const SizedBox(height: 10),
-              if (textOf(company['website']).isNotEmpty)
-                Center(
-                  child: OutlinedButton.icon(
-                    onPressed: () => launchExternal(textOf(company['website'])),
-                    icon: const Icon(Icons.public),
-                    label: const Text('Website'),
-                  ),
+              Center(
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    if (textOf(company['website']).isNotEmpty)
+                      OutlinedButton.icon(
+                        onPressed: () =>
+                            launchExternal(textOf(company['website'])),
+                        icon: const Icon(Icons.public),
+                        label: const Text('Website'),
+                      ),
+                    if (companyLat != null && companyLng != null)
+                      OutlinedButton.icon(
+                        onPressed: () => openMapLocation(
+                          lat: companyLat,
+                          lng: companyLng,
+                          label: textOf(company['name']),
+                        ),
+                        icon: const Icon(Icons.map_outlined),
+                        label: const Text('Chỉ đường'),
+                      ),
+                  ],
                 ),
+              ),
               const SizedBox(height: 12),
               Text(textOf(company['description'], 'Chưa có mô tả công ty.')),
               const SizedBox(height: 16),
@@ -5249,6 +6552,25 @@ Future<void> showCompanyDetailSheet(
                     subtitle: Text(
                       '${salaryText(job)} • Hạn ${textOf(job['deadline'], textOf(job['expire_at']))}',
                     ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () {
+                      final jobId = intValue(job['id']) ?? 0;
+                      if (jobId == 0) return;
+                      Navigator.of(sheetContext).pop();
+                      Future<void>.delayed(
+                        const Duration(milliseconds: 160),
+                        () {
+                          if (!parentContext.mounted) return;
+                          showJobDetailSheet(
+                            parentContext,
+                            api: api,
+                            session: session,
+                            config: config,
+                            jobId: jobId,
+                          );
+                        },
+                      );
+                    },
                   ),
                 ),
             ],
@@ -5259,71 +6581,100 @@ Future<void> showCompanyDetailSheet(
   );
 }
 
+Future<void> settleTextInput() async {
+  FocusManager.instance.primaryFocus?.unfocus();
+  await Future<void>.delayed(const Duration(milliseconds: 90));
+}
+
+Future<void> popDialogSafely<T>(BuildContext context, [T? result]) async {
+  await settleTextInput();
+  if (context.mounted) {
+    Navigator.of(context).pop<T>(result);
+  }
+}
+
 Future<bool> showApplyDialog(
   BuildContext context,
   RecruitmentApi api,
-  int jobId,
-  List<Map<String, dynamic>> resumes,
-) async {
+  int jobId, {
+  String companyName = 'nhà tuyển dụng',
+}) async {
   UploadFile? cv;
-  int? resumeId;
+  var useLatestCv = false;
   var sending = false;
   final result = await showDialog<bool>(
     context: context,
+    barrierDismissible: false,
     builder: (context) => StatefulBuilder(
       builder: (context, setState) => AlertDialog(
         title: const Text('Ứng tuyển công việc'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (resumes.isNotEmpty)
-              DropdownButtonFormField<int>(
-                initialValue: resumeId,
-                decoration: const InputDecoration(
-                  labelText: 'CV đã tạo (tùy chọn)',
+        content: SizedBox(
+          width: 520,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Lần đầu hãy tải lên CV PDF. Những lần sau bạn có thể dùng lại CV đã nộp gần nhất.',
                 ),
-                items: [
-                  const DropdownMenuItem<int>(
-                    value: null,
-                    child: Text('Không chọn'),
+                const SizedBox(height: 10),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: useLatestCv,
+                  onChanged: sending
+                      ? null
+                      : (value) {
+                          setState(() {
+                            useLatestCv = value;
+                            if (value) cv = null;
+                          });
+                        },
+                  title: const Text('Dùng lại CV đã nộp gần nhất'),
+                  subtitle: const Text(
+                    'Áp dụng khi bạn đã từng ứng tuyển bằng PDF.',
                   ),
-                  for (final resume in resumes)
-                    DropdownMenuItem(
-                      value: intValue(resume['id']),
-                      child: Text(textOf(resume['title'], 'CV')),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: sending || useLatestCv
+                        ? null
+                        : () async {
+                            final file = await pickUploadFile(
+                              'cv',
+                              extensions: ['pdf'],
+                            );
+                            if (file != null) setState(() => cv = file);
+                          },
+                    icon: const Icon(Icons.attach_file),
+                    label: Text(
+                      cv?.name ?? 'Chọn file PDF CV',
+                      overflow: TextOverflow.ellipsis,
                     ),
-                ],
-                onChanged: (value) => setState(() => resumeId = value),
-              ),
-            const SizedBox(height: 10),
-            OutlinedButton.icon(
-              onPressed: sending
-                  ? null
-                  : () async {
-                      final file = await pickUploadFile(
-                        'cv',
-                        extensions: ['pdf'],
-                      );
-                      if (file != null) setState(() => cv = file);
-                    },
-              icon: const Icon(Icons.attach_file),
-              label: Text(cv?.name ?? 'Chọn file PDF CV'),
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
         actions: [
           TextButton(
-            onPressed: sending ? null : () => Navigator.pop(context, false),
+            onPressed: sending ? null : () => popDialogSafely(context, false),
             child: const Text('Hủy'),
           ),
           FilledButton(
-            onPressed: sending || cv == null
+            onPressed: sending || (cv == null && !useLatestCv)
                 ? null
                 : () async {
                     setState(() => sending = true);
                     try {
-                      await api.applyJob(jobId, cv!, resumeId: resumeId);
-                      Navigator.pop(context, true);
+                      await api.applyJob(
+                        jobId,
+                        cv: cv,
+                        useLatestCv: useLatestCv,
+                      );
+                      await popDialogSafely(context, true);
                     } catch (error) {
                       showSnack(context, error.toString(), isError: true);
                       setState(() => sending = false);
@@ -5335,75 +6686,10 @@ Future<bool> showApplyDialog(
       ),
     ),
   );
-  if (result == true) showSnack(context, 'Đã gửi hồ sơ ứng tuyển.');
+  if (result == true) {
+    showSnack(context, 'Đã gửi đơn ứng tuyển thành công tới $companyName.');
+  }
   return result == true;
-}
-
-Future<void> showApiSettingsDialog(
-  BuildContext context,
-  ApiConfig config,
-  RecruitmentApi api,
-) async {
-  final controller = TextEditingController(text: config.baseUrl);
-  var testing = false;
-  await showDialog<void>(
-    context: context,
-    builder: (context) => StatefulBuilder(
-      builder: (context, setState) => AlertDialog(
-        title: const Text('Cấu hình API LAN'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            TextField(
-              controller: controller,
-              decoration: const InputDecoration(
-                labelText: 'Base URL',
-                helperText: 'Ví dụ: http://192.168.2.220:8000/api',
-              ),
-            ),
-            const SizedBox(height: 10),
-            const Text(
-              'Laravel cần chạy bằng php artisan serve --host=0.0.0.0 --port=8000 để điện thoại trong LAN truy cập được.',
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Đóng'),
-          ),
-          OutlinedButton(
-            onPressed: testing
-                ? null
-                : () async {
-                    setState(() => testing = true);
-                    final old = config.baseUrl;
-                    try {
-                      await config.setBaseUrl(controller.text);
-                      await api.locations();
-                      showSnack(context, 'Kết nối API thành công.');
-                    } catch (error) {
-                      await config.setBaseUrl(old);
-                      showSnack(context, error.toString(), isError: true);
-                    } finally {
-                      setState(() => testing = false);
-                    }
-                  },
-            child: Text(testing ? 'Đang thử...' : 'Thử kết nối'),
-          ),
-          FilledButton(
-            onPressed: () async {
-              await config.setBaseUrl(controller.text);
-              Navigator.pop(context);
-            },
-            child: const Text('Lưu'),
-          ),
-        ],
-      ),
-    ),
-  );
-  controller.dispose();
 }
 
 class ProfileSection {
@@ -5430,6 +6716,7 @@ class ProfileSection {
       'role',
       'technologies',
       'description',
+      'link',
       'start_date',
       'end_date',
       'receive_date',
@@ -5448,6 +6735,7 @@ class FieldSpec {
     this.maxLines = 1,
     this.number = false,
     this.boolean = false,
+    this.options,
   });
 
   final String key;
@@ -5455,15 +6743,16 @@ class FieldSpec {
   final int maxLines;
   final bool number;
   final bool boolean;
+  final List<String>? options;
 }
 
 const profileSections = [
   ProfileSection('educations', 'Học vấn', [
     FieldSpec('school', 'Trường'),
     FieldSpec('major', 'Chuyên ngành'),
+    FieldSpec('description', 'Trình độ học vấn', options: kEducationOptions),
     FieldSpec('start_date', 'Ngày bắt đầu YYYY-MM-DD'),
     FieldSpec('end_date', 'Ngày kết thúc YYYY-MM-DD'),
-    FieldSpec('description', 'Mô tả', maxLines: 3),
   ], Icons.school_outlined),
   ProfileSection('experiences', 'Kinh nghiệm', [
     FieldSpec('name', 'Vị trí'),
@@ -5474,18 +6763,9 @@ const profileSections = [
   ], Icons.work_history_outlined),
   ProfileSection('skills', 'Kỹ năng', [
     FieldSpec('name', 'Tên kỹ năng'),
-    FieldSpec('proficiency', 'Mức độ 0-100', number: true),
-    FieldSpec('description', 'Mô tả'),
   ], Icons.psychology_outlined),
   ProfileSection('projects', 'Dự án', [
-    FieldSpec('name', 'Tên dự án'),
-    FieldSpec('prj_type', 'Loại dự án'),
-    FieldSpec('role', 'Vai trò'),
-    FieldSpec('technologies', 'Công nghệ'),
-    FieldSpec('start_date', 'Ngày bắt đầu YYYY-MM-DD'),
-    FieldSpec('end_date', 'Ngày kết thúc YYYY-MM-DD'),
-    FieldSpec('description', 'Mô tả', maxLines: 3),
-    FieldSpec('link', 'Liên kết'),
+    FieldSpec('link', 'Link Git / dự án'),
   ], Icons.rocket_launch_outlined),
   ProfileSection('certificates', 'Chứng chỉ', [
     FieldSpec('name', 'Tên chứng chỉ'),
@@ -5511,6 +6791,68 @@ const profileSections = [
   ], Icons.more_horiz),
 ];
 
+Future<List<String>?> showCandidateSkillPickerDialog(
+  BuildContext context,
+  List<Map<String, dynamic>> allSkills,
+  List<Map<String, dynamic>> currentSkills,
+) async {
+  final selected = currentSkills
+      .map((item) => textOf(item['name']).toLowerCase())
+      .where((name) => name.isNotEmpty)
+      .toSet();
+
+  return showDialog<List<String>>(
+    context: context,
+    barrierDismissible: false,
+    builder: (context) => StatefulBuilder(
+      builder: (context, setState) => AlertDialog(
+        title: const Text('Kỹ năng ứng viên'),
+        content: SizedBox(
+          width: 560,
+          child: SingleChildScrollView(
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final skill in allSkills)
+                  FilterChip(
+                    label: Text(textOf(skill['name'])),
+                    selected: selected.contains(
+                      textOf(skill['name']).toLowerCase(),
+                    ),
+                    onSelected: (value) {
+                      final name = textOf(skill['name']).toLowerCase();
+                      if (name.isEmpty) return;
+                      setState(() {
+                        value ? selected.add(name) : selected.remove(name);
+                      });
+                    },
+                  ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => popDialogSafely<List<String>>(context),
+            child: const Text('Hủy'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final names = allSkills
+                  .map((skill) => textOf(skill['name']))
+                  .where((name) => selected.contains(name.toLowerCase()))
+                  .toList();
+              popDialogSafely(context, names);
+            },
+            child: const Text('Lưu'),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
 Future<SectionDialogResult?> showSectionDialog(
   BuildContext context,
   ProfileSection section,
@@ -5520,6 +6862,12 @@ Future<SectionDialogResult?> showSectionDialog(
     for (final field in section.fields.where((field) => !field.boolean))
       field.key: TextEditingController(text: textOf(item?[field.key])),
   };
+  for (final field in section.fields.where((field) => field.options != null)) {
+    final current = controllers[field.key]!.text;
+    if (!field.options!.contains(current)) {
+      controllers[field.key]!.text = field.options!.first;
+    }
+  }
   final boolValues = {
     for (final field in section.fields.where((field) => field.boolean))
       field.key: boolValue(item?[field.key]),
@@ -5527,6 +6875,7 @@ Future<SectionDialogResult?> showSectionDialog(
   UploadFile? image;
   final result = await showDialog<SectionDialogResult>(
     context: context,
+    barrierDismissible: false,
     builder: (context) => StatefulBuilder(
       builder: (context, setState) => AlertDialog(
         title: Text(
@@ -5548,6 +6897,24 @@ Future<SectionDialogResult?> showSectionDialog(
                             () => boolValues[field.key] = value ?? false,
                           ),
                           title: Text(field.label),
+                        )
+                      : field.options != null
+                      ? DropdownButtonFormField<String>(
+                          initialValue:
+                              field.options!.contains(
+                                controllers[field.key]!.text,
+                              )
+                              ? controllers[field.key]!.text
+                              : field.options!.first,
+                          isExpanded: true,
+                          decoration: InputDecoration(labelText: field.label),
+                          items: [
+                            for (final item in field.options!)
+                              DropdownMenuItem(value: item, child: Text(item)),
+                          ],
+                          onChanged: (value) {
+                            controllers[field.key]!.text = value ?? '';
+                          },
                         )
                       : TextField(
                           controller: controllers[field.key],
@@ -5575,7 +6942,7 @@ Future<SectionDialogResult?> showSectionDialog(
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => popDialogSafely<SectionDialogResult>(context),
             child: const Text('Hủy'),
           ),
           FilledButton(
@@ -5591,7 +6958,7 @@ Future<SectionDialogResult?> showSectionDialog(
                       : value;
                 }
               }
-              Navigator.pop(context, SectionDialogResult(fields, image));
+              popDialogSafely(context, SectionDialogResult(fields, image));
             },
             child: const Text('Lưu'),
           ),
@@ -5599,6 +6966,7 @@ Future<SectionDialogResult?> showSectionDialog(
       ),
     ),
   );
+  await settleTextInput();
   for (final controller in controllers.values) {
     controller.dispose();
   }
@@ -5646,6 +7014,7 @@ Future<CandidatePersonalResult?> showCandidatePersonalDialog(
   var resolving = false;
   final result = await showDialog<CandidatePersonalResult>(
     context: context,
+    barrierDismissible: false,
     builder: (context) => StatefulBuilder(
       builder: (context, setState) => AlertDialog(
         title: const Text('Thông tin cá nhân'),
@@ -5740,7 +7109,7 @@ Future<CandidatePersonalResult?> showCandidatePersonalDialog(
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => popDialogSafely<CandidatePersonalResult>(context),
             child: const Text('Hủy'),
           ),
           FilledButton(
@@ -5750,7 +7119,7 @@ Future<CandidatePersonalResult?> showCandidatePersonalDialog(
                 fields[spec.key] = controllers[spec.key]!.text.trim();
               }
               fields['delete_img'] = deleteImage ? 1 : 0;
-              Navigator.pop(context, CandidatePersonalResult(fields, image));
+              popDialogSafely(context, CandidatePersonalResult(fields, image));
             },
             child: const Text('Lưu'),
           ),
@@ -5758,6 +7127,7 @@ Future<CandidatePersonalResult?> showCandidatePersonalDialog(
       ),
     ),
   );
+  await settleTextInput();
   for (final controller in controllers.values) {
     controller.dispose();
   }
@@ -5787,6 +7157,7 @@ Future<Map<String, dynamic>?> showBranchDialog(
 
   final result = await showDialog<Map<String, dynamic>>(
     context: context,
+    barrierDismissible: false,
     builder: (context) => StatefulBuilder(
       builder: (context, setState) => AlertDialog(
         title: Text(branch == null ? 'Thêm chi nhánh' : 'Cập nhật chi nhánh'),
@@ -5802,28 +7173,13 @@ Future<Map<String, dynamic>?> showBranchDialog(
                   validator: requiredValidator,
                 ),
                 const SizedBox(height: 10),
-                textField(
-                  controllers['address']!,
-                  'Địa chỉ',
-                  maxLines: 2,
-                  validator: requiredValidator,
-                ),
-                const SizedBox(height: 10),
-                Row(
+                ResponsiveFormRow(
                   children: [
-                    Expanded(
-                      child: textField(
-                        controllers['contact_name']!,
-                        'Người liên hệ',
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: textField(
-                        controllers['phone']!,
-                        'Điện thoại',
-                        keyboardType: TextInputType.phone,
-                      ),
+                    textField(controllers['contact_name']!, 'Người liên hệ'),
+                    textField(
+                      controllers['phone']!,
+                      'Điện thoại',
+                      keyboardType: TextInputType.phone,
                     ),
                   ],
                 ),
@@ -5856,6 +7212,10 @@ Future<Map<String, dynamic>?> showBranchDialog(
                                 controllers['map_lng']!.text = textOf(
                                   resolved['lng'],
                                 );
+                                controllers['address']!.text = textOf(
+                                  resolved['address'],
+                                  controllers['address']!.text,
+                                );
                                 showSnack(
                                   context,
                                   'Đã lấy tọa độ từ Google Maps.',
@@ -5881,6 +7241,17 @@ Future<Map<String, dynamic>?> showBranchDialog(
                   ),
                 ),
                 const SizedBox(height: 10),
+                if (controllers['address']!.text.trim().isNotEmpty)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: Text(
+                        controllers['address']!.text.trim(),
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                  ),
                 Align(
                   alignment: Alignment.centerLeft,
                   child: Wrap(
@@ -5911,14 +7282,16 @@ Future<Map<String, dynamic>?> showBranchDialog(
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => popDialogSafely<Map<String, dynamic>>(context),
             child: const Text('Hủy'),
           ),
           FilledButton(
             onPressed: () {
-              Navigator.pop(context, {
+              popDialogSafely(context, {
                 'name': controllers['name']!.text.trim(),
-                'address': controllers['address']!.text.trim(),
+                'address': controllers['address']!.text.trim().isNotEmpty
+                    ? controllers['address']!.text.trim()
+                    : 'Tọa độ: ${controllers['map_lat']!.text.trim()}, ${controllers['map_lng']!.text.trim()}',
                 'contact_name': controllers['contact_name']!.text.trim(),
                 'phone': controllers['phone']!.text.trim(),
                 'email': controllers['email']!.text.trim(),
@@ -5934,6 +7307,7 @@ Future<Map<String, dynamic>?> showBranchDialog(
     ),
   );
 
+  await settleTextInput();
   for (final controller in [...controllers.values, mapUrl]) {
     controller.dispose();
   }
@@ -5952,7 +7326,6 @@ Future<Map<String, dynamic>?> showMemberDialog(
     'password': TextEditingController(),
     'name': TextEditingController(text: textOf(member?['name'])),
     'phone': TextEditingController(text: textOf(member?['phone'])),
-    'title': TextEditingController(text: textOf(member?['title'])),
   };
   final roles = actorRole == 'company_owner'
       ? ['branch_manager', 'branch_hr']
@@ -5965,6 +7338,7 @@ Future<Map<String, dynamic>?> showMemberDialog(
 
   final result = await showDialog<Map<String, dynamic>>(
     context: context,
+    barrierDismissible: false,
     builder: (context) => StatefulBuilder(
       builder: (context, setState) => AlertDialog(
         title: Text(member == null ? 'Tạo tài khoản HR' : 'Cập nhật tài khoản'),
@@ -5989,18 +7363,12 @@ Future<Map<String, dynamic>?> showMemberDialog(
                   validator: requiredValidator,
                 ),
                 const SizedBox(height: 10),
-                Row(
+                ResponsiveFormRow(
                   children: [
-                    Expanded(
-                      child: textField(
-                        controllers['phone']!,
-                        'Điện thoại',
-                        keyboardType: TextInputType.phone,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: textField(controllers['title']!, 'Chức danh'),
+                    textField(
+                      controllers['phone']!,
+                      'Điện thoại',
+                      keyboardType: TextInputType.phone,
                     ),
                   ],
                 ),
@@ -6063,7 +7431,7 @@ Future<Map<String, dynamic>?> showMemberDialog(
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => popDialogSafely<Map<String, dynamic>>(context),
             child: const Text('Hủy'),
           ),
           FilledButton(
@@ -6071,7 +7439,6 @@ Future<Map<String, dynamic>?> showMemberDialog(
               final data = <String, dynamic>{
                 'name': controllers['name']!.text.trim(),
                 'phone': controllers['phone']!.text.trim(),
-                'title': controllers['title']!.text.trim(),
                 'role': role,
                 'branch_id': branchId,
                 'status': status,
@@ -6082,7 +7449,7 @@ Future<Map<String, dynamic>?> showMemberDialog(
               if (controllers['password']!.text.trim().isNotEmpty) {
                 data['password'] = controllers['password']!.text.trim();
               }
-              Navigator.pop(context, data);
+              popDialogSafely(context, data);
             },
             child: const Text('Lưu'),
           ),
@@ -6091,6 +7458,7 @@ Future<Map<String, dynamic>?> showMemberDialog(
     ),
   );
 
+  await settleTextInput();
   for (final controller in controllers.values) {
     controller.dispose();
   }
@@ -6132,6 +7500,7 @@ Future<EmployerProfileResult?> showEmployerProfileDialog(
   var resolving = false;
   final result = await showDialog<EmployerProfileResult>(
     context: context,
+    barrierDismissible: false,
     builder: (context) => StatefulBuilder(
       builder: (context, setState) => AlertDialog(
         title: const Text('Cập nhật công ty'),
@@ -6199,33 +7568,35 @@ Future<EmployerProfileResult?> showEmployerProfileDialog(
                 ),
               ),
               const SizedBox(height: 10),
-              Row(
+              ResponsiveButtonGroup(
+                stretchBelow: 520,
                 children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () async {
-                        final file = await pickUploadFile(
-                          'logo',
-                          extensions: ['jpg', 'jpeg', 'png', 'webp'],
-                        );
-                        if (file != null) setState(() => logo = file);
-                      },
-                      icon: const Icon(Icons.badge_outlined),
-                      label: Text(logo?.name ?? 'Logo'),
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      final file = await pickUploadFile(
+                        'logo',
+                        extensions: ['jpg', 'jpeg', 'png', 'webp'],
+                      );
+                      if (file != null) setState(() => logo = file);
+                    },
+                    icon: const Icon(Icons.badge_outlined),
+                    label: Text(
+                      logo?.name ?? 'Logo',
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () async {
-                        final file = await pickUploadFile(
-                          'image',
-                          extensions: ['jpg', 'jpeg', 'png', 'webp'],
-                        );
-                        if (file != null) setState(() => image = file);
-                      },
-                      icon: const Icon(Icons.image_outlined),
-                      label: Text(image?.name ?? 'Ảnh bìa'),
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      final file = await pickUploadFile(
+                        'image',
+                        extensions: ['jpg', 'jpeg', 'png', 'webp'],
+                      );
+                      if (file != null) setState(() => image = file);
+                    },
+                    icon: const Icon(Icons.image_outlined),
+                    label: Text(
+                      image?.name ?? 'Ảnh bìa',
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
                 ],
@@ -6235,12 +7606,12 @@ Future<EmployerProfileResult?> showEmployerProfileDialog(
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => popDialogSafely<EmployerProfileResult>(context),
             child: const Text('Hủy'),
           ),
           FilledButton(
             onPressed: () {
-              Navigator.pop(
+              popDialogSafely(
                 context,
                 EmployerProfileResult(
                   {
@@ -6258,6 +7629,7 @@ Future<EmployerProfileResult?> showEmployerProfileDialog(
       ),
     ),
   );
+  await settleTextInput();
   for (final controller in controllers.values) {
     controller.dispose();
   }
@@ -6337,26 +7709,57 @@ Future<Map<String, dynamic>?> showJobFormDialog(
       .whereType<int>()
       .toSet();
   final mapUrl = TextEditingController();
+  final formKey = GlobalKey<FormState>();
+  final educationChoices = <String>{
+    ...kEducationOptions,
+    if (textOf(job?['education_level']).isNotEmpty)
+      textOf(job?['education_level']),
+  }.toList();
+  final languageChoices = <String>{
+    ...kLanguageOptions,
+    if (textOf(job?['required_languages']).isNotEmpty)
+      textOf(job?['required_languages']),
+  }.toList();
+  var educationLevel = textOf(job?['education_level'], kEducationOptions.first);
+  var requiredLanguage = textOf(
+    job?['required_languages'],
+    kLanguageOptions.first,
+  );
+  if (!educationChoices.contains(educationLevel)) {
+    educationChoices.add(educationLevel);
+  }
+  if (!languageChoices.contains(requiredLanguage)) {
+    languageChoices.add(requiredLanguage);
+  }
+  var submitted = false;
   var resolving = false;
 
   final result = await showDialog<Map<String, dynamic>>(
     context: context,
+    barrierDismissible: false,
     builder: (context) => StatefulBuilder(
       builder: (context, setState) => AlertDialog(
         title: Text(job == null ? 'Tạo tin tuyển dụng' : 'Sửa tin tuyển dụng'),
         content: SizedBox(
           width: 680,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                textField(controllers['jname']!, 'Chức danh / vị trí'),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: DropdownButtonFormField<int>(
+          child: Form(
+            key: formKey,
+            autovalidateMode: AutovalidateMode.onUserInteraction,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  textField(
+                    controllers['jname']!,
+                    'Chức danh / vị trí',
+                    validator: requiredValidator,
+                  ),
+                  const SizedBox(height: 10),
+                  ResponsiveFormRow(
+                    children: [
+                      DropdownButtonFormField<int>(
                         initialValue: jtypeId,
+                        isExpanded: true,
                         decoration: const InputDecoration(
                           labelText: 'Hình thức làm việc',
                         ),
@@ -6364,51 +7767,60 @@ Future<Map<String, dynamic>?> showJobFormDialog(
                           for (final item in jtypes)
                             DropdownMenuItem(
                               value: intValue(item['id']),
-                              child: Text(textOf(item['name'])),
+                              child: Text(
+                                textOf(item['name']),
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
                         ],
+                        validator: (value) =>
+                            value == null ? 'Chọn hình thức làm việc' : null,
                         onChanged: (value) => setState(() => jtypeId = value),
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: DropdownButtonFormField<int>(
+                      DropdownButtonFormField<int>(
                         initialValue: jlevelId,
+                        isExpanded: true,
                         decoration: const InputDecoration(labelText: 'Cấp bậc'),
                         items: [
                           for (final item in jlevels)
                             DropdownMenuItem(
                               value: intValue(item['id']),
-                              child: Text(textOf(item['name'])),
+                              child: Text(
+                                textOf(item['name']),
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
                         ],
+                        validator: (value) =>
+                            value == null ? 'Chọn cấp bậc' : null,
                         onChanged: (value) => setState(() => jlevelId = value),
                       ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                DropdownButtonFormField<int>(
-                  initialValue: branchId,
-                  isExpanded: true,
-                  decoration: const InputDecoration(
-                    labelText: 'Chi nhánh phụ trách',
+                    ],
                   ),
-                  items: [
-                    for (final item in branches)
-                      DropdownMenuItem(
-                        value: intValue(item['id']),
-                        child: Text(textOf(item['name'])),
-                      ),
-                  ],
-                  onChanged: (value) => setState(() => branchId = value),
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
+                  const SizedBox(height: 10),
+                  DropdownButtonFormField<int>(
+                    initialValue: branchId,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Chi nhánh phụ trách',
+                    ),
+                    items: [
+                      for (final item in branches)
+                        DropdownMenuItem(
+                          value: intValue(item['id']),
+                          child: Text(textOf(item['name'])),
+                        ),
+                    ],
+                    validator: (value) =>
+                        value == null ? 'Chọn chi nhánh phụ trách' : null,
+                    onChanged: (value) => setState(() => branchId = value),
+                  ),
+                  const SizedBox(height: 10),
+                  ResponsiveFormRow(
+                    children: [
+                      DropdownButtonFormField<String>(
                         initialValue: workLocationType,
+                        isExpanded: true,
                         decoration: const InputDecoration(
                           labelText: 'Địa điểm làm việc',
                         ),
@@ -6434,11 +7846,9 @@ Future<Map<String, dynamic>?> showJobFormDialog(
                           () => workLocationType = value ?? 'onsite',
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
+                      DropdownButtonFormField<String>(
                         initialValue: status,
+                        isExpanded: true,
                         decoration: const InputDecoration(
                           labelText: 'Trạng thái',
                         ),
@@ -6460,221 +7870,283 @@ Future<Map<String, dynamic>?> showJobFormDialog(
                         onChanged: (value) =>
                             setState(() => status = value ?? 'active'),
                       ),
-                    ),
-                  ],
-                ),
-                if (workLocationType == 'special') ...[
-                  const SizedBox(height: 10),
-                  textField(
-                    controllers['special_address']!,
-                    'Địa điểm đặc biệt',
-                    maxLines: 2,
+                    ],
                   ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: mapUrl,
-                    decoration: InputDecoration(
-                      labelText: 'Link Google Maps',
-                      suffixIcon: IconButton(
-                        tooltip: 'Lấy tọa độ',
-                        onPressed: resolving
-                            ? null
-                            : () async {
-                                if (mapUrl.text.trim().isEmpty) return;
-                                setState(() => resolving = true);
-                                try {
-                                  final resolved = await api
-                                      .resolveEmployerMapLink(
-                                        mapUrl.text.trim(),
-                                      );
-                                  controllers['map_lat']!.text = textOf(
-                                    resolved['lat'],
-                                  );
-                                  controllers['map_lng']!.text = textOf(
-                                    resolved['lng'],
-                                  );
-                                  showSnack(
-                                    context,
-                                    'Đã lấy tọa độ từ Google Maps.',
-                                  );
-                                } catch (error) {
-                                  showSnack(
-                                    context,
-                                    error.toString(),
-                                    isError: true,
-                                  );
-                                } finally {
-                                  setState(() => resolving = false);
-                                }
-                              },
-                        icon: resolving
-                            ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Icon(Icons.my_location_outlined),
+                  if (workLocationType == 'special') ...[
+                    const SizedBox(height: 10),
+                    textField(
+                      controllers['special_address']!,
+                      'Địa điểm đặc biệt',
+                      maxLines: 2,
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: mapUrl,
+                      decoration: InputDecoration(
+                        labelText: 'Link Google Maps',
+                        suffixIcon: IconButton(
+                          tooltip: 'Lấy tọa độ',
+                          onPressed: resolving
+                              ? null
+                              : () async {
+                                  if (mapUrl.text.trim().isEmpty) return;
+                                  setState(() => resolving = true);
+                                  try {
+                                    final resolved = await api
+                                        .resolveEmployerMapLink(
+                                          mapUrl.text.trim(),
+                                        );
+                                    controllers['map_lat']!.text = textOf(
+                                      resolved['lat'],
+                                    );
+                                    controllers['map_lng']!.text = textOf(
+                                      resolved['lng'],
+                                    );
+                                    showSnack(
+                                      context,
+                                      'Đã lấy tọa độ từ Google Maps.',
+                                    );
+                                  } catch (error) {
+                                    showSnack(
+                                      context,
+                                      error.toString(),
+                                      isError: true,
+                                    );
+                                  } finally {
+                                    setState(() => resolving = false);
+                                  }
+                                },
+                          icon: resolving
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.my_location_outlined),
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Wrap(
-                      spacing: 8,
-                      children: [
-                        Chip(
-                          label: Text(
-                            'Vĩ độ: ${textOf(controllers['map_lat']!.text, 'chưa có')}',
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Wrap(
+                        spacing: 8,
+                        children: [
+                          Chip(
+                            label: Text(
+                              'Vĩ độ: ${textOf(controllers['map_lat']!.text, 'chưa có')}',
+                            ),
                           ),
-                        ),
-                        Chip(
-                          label: Text(
-                            'Kinh độ: ${textOf(controllers['map_lng']!.text, 'chưa có')}',
+                          Chip(
+                            label: Text(
+                              'Kinh độ: ${textOf(controllers['map_lng']!.text, 'chưa có')}',
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                ],
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: textField(
+                  ],
+                  const SizedBox(height: 10),
+                  ResponsiveFormRow(
+                    children: [
+                      textField(
                         controllers['amount']!,
                         'Số lượng',
                         keyboardType: TextInputType.number,
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: textField(
+                      textField(
                         controllers['yoe']!,
                         'Năm kinh nghiệm',
                         keyboardType: TextInputType.number,
                       ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: textField(
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  ResponsiveFormRow(
+                    children: [
+                      textField(
                         controllers['min_salary']!,
                         'Lương từ',
                         keyboardType: TextInputType.number,
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: textField(
+                      textField(
                         controllers['max_salary']!,
                         'Đến',
                         keyboardType: TextInputType.number,
                       ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: textField(
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  ResponsiveFormRow(
+                    children: [
+                      textField(
                         controllers['gender']!,
                         'Giới tính 0 nữ, 1 nam, 2 không yêu cầu',
                         keyboardType: TextInputType.number,
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: textField(
-                        controllers['expire_at']!,
-                        'Hạn nộp YYYY-MM-DD',
+                      TextFormField(
+                        controller: controllers['expire_at']!,
+                        readOnly: true,
+                        validator: requiredValidator,
+                        decoration: const InputDecoration(
+                          labelText: 'Hạn nộp',
+                          suffixIcon: Icon(Icons.calendar_month_outlined),
+                        ),
+                        onTap: () async {
+                          final now = DateTime.now();
+                          final current =
+                              parseDateInput(controllers['expire_at']!.text) ??
+                              now.add(const Duration(days: 14));
+                          final picked = await showDatePicker(
+                            context: context,
+                            initialDate: current.isBefore(now) ? now : current,
+                            firstDate: DateTime(now.year, now.month, now.day),
+                            lastDate: now.add(const Duration(days: 1825)),
+                          );
+                          if (picked != null) {
+                            setState(() {
+                              controllers['expire_at']!.text = dateInput(
+                                picked,
+                              );
+                            });
+                          }
+                        },
                       ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  DropdownButtonFormField<String>(
+                    initialValue: educationLevel,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Học vấn yêu cầu',
                     ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                textField(controllers['education_level']!, 'Học vấn yêu cầu'),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: textField(
-                        controllers['required_languages']!,
-                        'Ngôn ngữ',
+                    items: [
+                      for (final item in educationChoices)
+                        DropdownMenuItem(value: item, child: Text(item)),
+                    ],
+                    onChanged: (value) => setState(
+                      () => educationLevel = value ?? kEducationOptions.first,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  ResponsiveFormRow(
+                    children: [
+                      DropdownButtonFormField<String>(
+                        initialValue: requiredLanguage,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Ngôn ngữ',
+                        ),
+                        items: [
+                          for (final item in languageChoices)
+                            DropdownMenuItem(value: item, child: Text(item)),
+                        ],
+                        onChanged: (value) => setState(
+                          () => requiredLanguage =
+                              value ?? kLanguageOptions.first,
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: textField(
+                      textField(
                         controllers['required_certificates']!,
                         'Chứng chỉ',
                       ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  textField(
+                    controllers['description']!,
+                    'Mô tả công việc',
+                    maxLines: 4,
+                    validator: requiredValidator,
+                  ),
+                  const SizedBox(height: 10),
+                  textField(
+                    controllers['requirements']!,
+                    'Yêu cầu ứng viên',
+                    maxLines: 4,
+                  ),
+                  const SizedBox(height: 10),
+                  textField(controllers['benefits']!, 'Quyền lợi', maxLines: 4),
+                  const SizedBox(height: 12),
+                  MultiChoiceBlock(
+                    title: 'Ngành nghề',
+                    items: industries,
+                    selectedIds: industryIds,
+                    onChanged: (ids) => setState(() {
+                      industryIds
+                        ..clear()
+                        ..addAll(ids);
+                    }),
+                  ),
+                  if (submitted && industryIds.isEmpty)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: Text(
+                          'Chọn ít nhất 1 ngành nghề',
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        ),
+                      ),
                     ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                textField(
-                  controllers['description']!,
-                  'Mô tả công việc',
-                  maxLines: 4,
-                ),
-                const SizedBox(height: 10),
-                textField(
-                  controllers['requirements']!,
-                  'Yêu cầu ứng viên',
-                  maxLines: 4,
-                ),
-                const SizedBox(height: 10),
-                textField(controllers['benefits']!, 'Quyền lợi', maxLines: 4),
-                const SizedBox(height: 12),
-                MultiChoiceBlock(
-                  title: 'Ngành nghề',
-                  items: industries,
-                  selectedIds: industryIds,
-                  onChanged: (ids) => setState(() {
-                    industryIds
-                      ..clear()
-                      ..addAll(ids);
-                  }),
-                ),
-                MultiChoiceBlock(
-                  title: 'Kỹ năng bắt buộc',
-                  items: skills,
-                  selectedIds: requiredSkillIds,
-                  onChanged: (ids) => setState(() {
-                    requiredSkillIds
-                      ..clear()
-                      ..addAll(ids);
-                  }),
-                ),
-                MultiChoiceBlock(
-                  title: 'Kỹ năng ưu tiên',
-                  items: skills,
-                  selectedIds: preferredSkillIds,
-                  onChanged: (ids) => setState(() {
-                    preferredSkillIds
-                      ..clear()
-                      ..addAll(ids);
-                  }),
-                ),
-              ],
+                  MultiChoiceBlock(
+                    title: 'Kỹ năng bắt buộc',
+                    items: skills,
+                    selectedIds: requiredSkillIds,
+                    onChanged: (ids) => setState(() {
+                      requiredSkillIds
+                        ..clear()
+                        ..addAll(ids);
+                    }),
+                  ),
+                  if (submitted && requiredSkillIds.isEmpty)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: Text(
+                          'Chọn ít nhất 1 kỹ năng bắt buộc',
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        ),
+                      ),
+                    ),
+                  MultiChoiceBlock(
+                    title: 'Kỹ năng ưu tiên',
+                    items: skills,
+                    selectedIds: preferredSkillIds,
+                    onChanged: (ids) => setState(() {
+                      preferredSkillIds
+                        ..clear()
+                        ..addAll(ids);
+                    }),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => popDialogSafely<Map<String, dynamic>>(context),
             child: const Text('Hủy'),
           ),
           FilledButton(
             onPressed: () {
-              Navigator.pop(context, {
+              setState(() => submitted = true);
+              final formValid = formKey.currentState?.validate() ?? false;
+              if (!formValid ||
+                  industryIds.isEmpty ||
+                  requiredSkillIds.isEmpty) {
+                return;
+              }
+              popDialogSafely(context, {
                 'jname': controllers['jname']!.text.trim(),
                 'branch_id': branchId,
                 'jtype_id': jtypeId,
@@ -6688,9 +8160,8 @@ Future<Map<String, dynamic>?> showJobFormDialog(
                 'max_salary': nullableInt(controllers['max_salary']!.text),
                 'yoe': nullableInt(controllers['yoe']!.text),
                 'gender': nullableInt(controllers['gender']!.text),
-                'education_level': controllers['education_level']!.text.trim(),
-                'required_languages': controllers['required_languages']!.text
-                    .trim(),
+                'education_level': educationLevel,
+                'required_languages': requiredLanguage,
                 'required_certificates': controllers['required_certificates']!
                     .text
                     .trim(),
@@ -6710,6 +8181,7 @@ Future<Map<String, dynamic>?> showJobFormDialog(
       ),
     ),
   );
+  await settleTextInput();
   for (final controller in controllers.values) {
     controller.dispose();
   }
@@ -6778,55 +8250,75 @@ Future<Map<String, dynamic>?> showApplicationMessageDialog(
         ? 'Thông báo hồ sơ phù hợp'
         : 'Thông báo kết quả ứng tuyển',
   );
-  final content = TextEditingController();
+  final content = TextEditingController(
+    text: defaultApplicationMessage(candidate, actType, status),
+  );
   var sendMail = false;
   final result = await showDialog<Map<String, dynamic>>(
     context: context,
+    barrierDismissible: false,
     builder: (context) => StatefulBuilder(
       builder: (context, setState) => AlertDialog(
         title: Text(actType == 'ACCEPT' ? 'Chấp nhận hồ sơ' : 'Từ chối hồ sơ'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              'Ứng viên: ${fullName(candidate)}\nVị trí: ${textOf(candidate['jname'])}',
+        content: SizedBox(
+          width: 520,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Ứng viên: ${fullName(candidate)}\nVị trí: ${textOf(candidate['jname'])}',
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: title,
+                  decoration: const InputDecoration(labelText: 'Tiêu đề'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: content,
+                  maxLines: 6,
+                  decoration: const InputDecoration(labelText: 'Nội dung'),
+                ),
+                CheckboxListTile(
+                  value: sendMail,
+                  onChanged: (value) =>
+                      setState(() => sendMail = value ?? false),
+                  title: const Text('Gửi email'),
+                ),
+              ],
             ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: title,
-              decoration: const InputDecoration(labelText: 'Tiêu đề'),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: content,
-              maxLines: 6,
-              decoration: const InputDecoration(labelText: 'Nội dung'),
-            ),
-            CheckboxListTile(
-              value: sendMail,
-              onChanged: (value) => setState(() => sendMail = value ?? false),
-              title: const Text('Gửi email'),
-            ),
-          ],
+          ),
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => popDialogSafely<Map<String, dynamic>>(context),
             child: const Text('Hủy'),
           ),
           FilledButton(
-            onPressed: () => Navigator.pop(context, {
-              'title': title.text.trim(),
-              'content': content.text.trim(),
-              'is_send_mail': sendMail,
-              'step': status == 'BROWSING_INTERVIEW' ? 'step2' : 'step1',
-            }),
+            onPressed: () {
+              final safeTitle = title.text.trim().isEmpty
+                  ? (actType == 'ACCEPT'
+                        ? 'Thông báo hồ sơ phù hợp'
+                        : 'Thông báo kết quả ứng tuyển')
+                  : title.text.trim();
+              final safeContent = content.text.trim().isEmpty
+                  ? defaultApplicationMessage(candidate, actType, status)
+                  : content.text.trim();
+              popDialogSafely(context, {
+                'title': safeTitle,
+                'content': safeContent,
+                'is_send_mail': sendMail,
+                'step': status == 'BROWSING_INTERVIEW' ? 'step2' : 'step1',
+              });
+            },
             child: const Text('Gửi'),
           ),
         ],
       ),
     ),
   );
+  await settleTextInput();
   title.dispose();
   content.dispose();
   return result;
@@ -6852,38 +8344,45 @@ Future<Map<String, dynamic>?> showContactCandidateDialog(
   var sendMail = true;
   final result = await showDialog<Map<String, dynamic>>(
     context: context,
+    barrierDismissible: false,
     builder: (context) => StatefulBuilder(
       builder: (context, setState) => AlertDialog(
         title: const Text('Liên hệ ứng viên'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('${fullName(candidate)}\n${textOf(candidate['email'])}'),
-            const SizedBox(height: 10),
-            TextField(
-              controller: title,
-              decoration: const InputDecoration(labelText: 'Tiêu đề'),
+        content: SizedBox(
+          width: 520,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('${fullName(candidate)}\n${textOf(candidate['email'])}'),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: title,
+                  decoration: const InputDecoration(labelText: 'Tiêu đề'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: content,
+                  maxLines: 7,
+                  decoration: const InputDecoration(labelText: 'Nội dung'),
+                ),
+                CheckboxListTile(
+                  value: sendMail,
+                  onChanged: (value) =>
+                      setState(() => sendMail = value ?? true),
+                  title: const Text('Gửi email'),
+                ),
+              ],
             ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: content,
-              maxLines: 7,
-              decoration: const InputDecoration(labelText: 'Nội dung'),
-            ),
-            CheckboxListTile(
-              value: sendMail,
-              onChanged: (value) => setState(() => sendMail = value ?? true),
-              title: const Text('Gửi email'),
-            ),
-          ],
+          ),
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => popDialogSafely<Map<String, dynamic>>(context),
             child: const Text('Hủy'),
           ),
           FilledButton(
-            onPressed: () => Navigator.pop(context, {
+            onPressed: () => popDialogSafely(context, {
               'candidate_id': candidate['id'],
               'job_id': jobId,
               'title': title.text.trim(),
@@ -6896,9 +8395,30 @@ Future<Map<String, dynamic>?> showContactCandidateDialog(
       ),
     ),
   );
+  await settleTextInput();
   title.dispose();
   content.dispose();
   return result;
+}
+
+String defaultApplicationMessage(
+  Map<String, dynamic> candidate,
+  String actType,
+  String status,
+) {
+  final name = fullName(candidate);
+  final job = textOf(candidate['jname'], 'vị trí đã ứng tuyển');
+  final isInterviewStage = status == 'BROWSING_INTERVIEW';
+  if (actType == 'ACCEPT') {
+    if (isInterviewStage) {
+      return 'Xin chào $name,\n\nChúc mừng bạn đã vượt qua vòng phỏng vấn cho vị trí $job. Nhà tuyển dụng sẽ tiếp tục liên hệ để trao đổi bước tiếp theo.\n\nTrân trọng,';
+    }
+    return 'Xin chào $name,\n\nHồ sơ của bạn phù hợp với vị trí $job. Nhà tuyển dụng sẽ liên hệ để trao đổi lịch phỏng vấn và các thông tin tiếp theo.\n\nTrân trọng,';
+  }
+  if (isInterviewStage) {
+    return 'Xin chào $name,\n\nCảm ơn bạn đã tham gia phỏng vấn vị trí $job. Hiện tại hồ sơ của bạn chưa phù hợp với nhu cầu tuyển dụng ở giai đoạn này.\n\nChúc bạn sớm tìm được cơ hội phù hợp.';
+  }
+  return 'Xin chào $name,\n\nCảm ơn bạn đã quan tâm và ứng tuyển vị trí $job. Hiện tại hồ sơ của bạn chưa phù hợp với yêu cầu tuyển dụng ở giai đoạn này.\n\nChúc bạn sớm tìm được cơ hội phù hợp.';
 }
 
 Future<String?> showTextInputDialog(
@@ -6910,6 +8430,7 @@ Future<String?> showTextInputDialog(
   final controller = TextEditingController(text: initialValue);
   final result = await showDialog<String>(
     context: context,
+    barrierDismissible: false,
     builder: (context) => AlertDialog(
       title: Text(title),
       content: TextField(
@@ -6918,16 +8439,17 @@ Future<String?> showTextInputDialog(
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.pop(context),
+          onPressed: () => popDialogSafely<String>(context),
           child: const Text('Hủy'),
         ),
         FilledButton(
-          onPressed: () => Navigator.pop(context, controller.text),
+          onPressed: () => popDialogSafely(context, controller.text),
           child: const Text('Lưu'),
         ),
       ],
     ),
   );
+  await settleTextInput();
   controller.dispose();
   return result;
 }
@@ -6940,11 +8462,11 @@ Future<bool> confirmDialog(BuildContext context, String message) async {
           content: Text(message),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(context, false),
+              onPressed: () => popDialogSafely(context, false),
               child: const Text('Hủy'),
             ),
             FilledButton(
-              onPressed: () => Navigator.pop(context, true),
+              onPressed: () => popDialogSafely(context, true),
               child: const Text('Đồng ý'),
             ),
           ],
@@ -7036,6 +8558,21 @@ String? requiredValidator(String? value) {
   return null;
 }
 
+String dateInput(DateTime value) {
+  final month = value.month.toString().padLeft(2, '0');
+  final day = value.day.toString().padLeft(2, '0');
+  return '${value.year}-$month-$day';
+}
+
+DateTime? parseDateInput(String value) {
+  try {
+    if (value.trim().isEmpty) return null;
+    return DateTime.parse(value.trim());
+  } catch (_) {
+    return null;
+  }
+}
+
 Future<UploadFile?> pickUploadFile(
   String field, {
   List<String>? extensions,
@@ -7070,6 +8607,88 @@ Future<void> launchExternal(String url) async {
   final uri = Uri.tryParse(url.trim());
   if (uri == null) return;
   await launchUrl(uri, mode: LaunchMode.externalApplication);
+}
+
+Future<void> openMapLocation({
+  required double lat,
+  required double lng,
+  String? label,
+}) async {
+  final query = Uri.encodeComponent(
+    label == null || label.trim().isEmpty
+        ? '$lat,$lng'
+        : '${label.trim()}@$lat,$lng',
+  );
+  await launchExternal(
+    'https://www.google.com/maps/search/?api=1&query=$query',
+  );
+}
+
+Future<void> openPdfViewer(
+  BuildContext context,
+  ApiConfig config,
+  String rawUrl, {
+  String title = 'CV đã nộp',
+}) async {
+  final url = config.resolveAssetUrl(rawUrl);
+  if (url.isEmpty || Uri.tryParse(url) == null) {
+    showSnack(context, 'Không tìm thấy đường dẫn CV.', isError: true);
+    return;
+  }
+  await Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => PdfViewerScreen(title: title, url: url),
+    ),
+  );
+}
+
+class PdfViewerScreen extends StatefulWidget {
+  const PdfViewerScreen({super.key, required this.title, required this.url});
+
+  final String title;
+  final String url;
+
+  @override
+  State<PdfViewerScreen> createState() => _PdfViewerScreenState();
+}
+
+class _PdfViewerScreenState extends State<PdfViewerScreen> {
+  String _error = '';
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.title),
+        actions: [
+          IconButton(
+            tooltip: 'Mở bằng trình duyệt',
+            onPressed: () => launchExternal(widget.url),
+            icon: const Icon(Icons.open_in_new),
+          ),
+        ],
+      ),
+      body: _error.isNotEmpty
+          ? Padding(
+              padding: const EdgeInsets.all(16),
+              child: ErrorPanel(
+                message: _error,
+                onRetry: () => setState(() => _error = ''),
+              ),
+            )
+          : SfPdfViewer.network(
+              widget.url,
+              canShowScrollHead: true,
+              canShowScrollStatus: true,
+              onDocumentLoadFailed: (details) {
+                setState(() {
+                  _error =
+                      'Không mở được CV trong app.\n${details.error}\n${details.description}';
+                });
+              },
+            ),
+    );
+  }
 }
 
 Map<String, dynamic> asMap(dynamic value) {
@@ -7134,6 +8753,18 @@ String fullName(Map<String, dynamic> data) {
   ].where((part) => part.isNotEmpty).join(' ');
   if (name.isNotEmpty) return name;
   return textOf(data['name'], 'Ứng viên');
+}
+
+String initialsOf(String value) {
+  final parts = value
+      .trim()
+      .split(RegExp(r'\s+'))
+      .where((part) => part.isNotEmpty)
+      .toList();
+  if (parts.isEmpty) return 'R';
+  if (parts.length == 1) return parts.first.characters.first.toUpperCase();
+  return '${parts.first.characters.first}${parts.last.characters.first}'
+      .toUpperCase();
 }
 
 String salaryText(Map<String, dynamic> job) {

@@ -49,6 +49,8 @@ Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
 Route::controller(AuthController::class)->group(function () {
     Route::post('login', 'login');
     Route::post('register', 'register');
+    Route::post('password/otp', 'requestPasswordOtp');
+    Route::post('password/reset', 'resetPasswordWithOtp');
     Route::get('logout', 'logout');
     Route::get('refresh', 'refresh');
     Route::get('getMe', 'me');
@@ -93,9 +95,20 @@ Route::controller(AdminController::class)->prefix('admin')->middleware('jwt')->g
     Route::get('jobs', 'getJobs');
     Route::post('resolveSharedMapLink', 'resolveSharedMapLink');
     Route::post('companies', 'createCompany');
+    Route::get('companies/{id}', 'getCompanyDetail');
+    Route::get('companies/{id}/branches', 'getCompanyBranches');
+    Route::post('companies/{id}/branches', 'createCompanyBranch');
+    Route::patch('branches/{id}', 'updateCompanyBranch');
+    Route::delete('branches/{id}', 'destroyCompanyBranch');
+    Route::get('companies/{id}/members', 'getCompanyMembers');
+    Route::post('companies/{id}/members', 'createCompanyMember');
+    Route::patch('members/{id}', 'updateCompanyMember');
+    Route::delete('members/{id}', 'destroyCompanyMember');
     Route::post('companies/{id}/update', 'updateCompany');
     Route::post('jobs/{id}/update', 'updateJob');
+    Route::delete('jobs/{id}', 'destroyJob');
     Route::delete('companies/{id}', 'destroyCompany');
+    Route::post('users/{id}/impersonate', 'impersonateUser');
     Route::post('users/{id}/status', 'toggleUserStatus');
     Route::post('users/{id}/password', 'updateUserPassword');
     Route::delete('users/{id}', 'destroyUser');
@@ -133,6 +146,7 @@ Route::controller(JobController::class)->prefix('jobs')->group(function () {
     Route::get('getHotList', 'getHotList');
     Route::post('', 'create')->middleware(['jwt', 'employer.access']);
     Route::post('{id}/update', 'update')->middleware(['jwt', 'employer.access']);
+    Route::delete('{id}', 'destroy')->middleware(['jwt', 'employer.access']);
     Route::get('{id}/getJobIndustries', 'getJobIndustries');
     Route::get('{id}/getJobSkills', 'getJobSkills');
     Route::post('{id}/apply', 'apply')->middleware('jwt');
@@ -148,6 +162,8 @@ Route::controller(CandidateController::class)->prefix('candidates')->group(funct
     Route::get('nearbyCompanies', 'getNearbyCompanies')->middleware('jwt');
     Route::post('resolveSharedMapLink', 'resolveSharedMapLink')->middleware('jwt');
     Route::post('update', 'update')->middleware('jwt');
+    Route::get('appliedJobs', 'getCurrentAppliedJobs')->middleware('jwt');
+    Route::get('savedJobs', 'getCurrentSavedJobs')->middleware('jwt');
     Route::get('{id}/getAppliedJobs', 'getAppliedJobs');
     Route::get('{id}/getSavedJobs', 'getSavedJobs');
     Route::post('{job_id}/processJobSaving', 'processJobSaving');

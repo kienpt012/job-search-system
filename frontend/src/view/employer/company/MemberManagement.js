@@ -6,6 +6,7 @@ import {
   BsPersonPlus,
   BsShieldLock,
   BsShieldCheck,
+  BsTrash,
   BsXCircle,
 } from "react-icons/bs";
 import { toast } from "react-toastify";
@@ -142,6 +143,19 @@ export default function MemberManagement() {
       await loadData();
     } catch (error) {
       toast.error(error?.response?.data?.message || "Không thể cập nhật trạng thái tài khoản.");
+    }
+  };
+
+  const deleteMember = async (member) => {
+    if (member.role === "company_owner") return;
+    if (!window.confirm(`Xóa tài khoản "${member.user?.email}"?`)) return;
+
+    try {
+      await employerApi.deleteMember(member.id);
+      toast.success("Đã xóa tài khoản.");
+      await loadData();
+    } catch (error) {
+      toast.error(error?.response?.data?.message || "Không thể xóa tài khoản.");
     }
   };
 
@@ -290,6 +304,11 @@ export default function MemberManagement() {
                     {member.role !== "company_owner" && isActive && canLock && (
                       <button type="button" className="is-danger" onClick={() => updateStatus(member, "inactive")} title="Khóa tài khoản">
                         <BsShieldLock />
+                      </button>
+                    )}
+                    {member.role !== "company_owner" && canLock && (
+                      <button type="button" className="is-danger" onClick={() => deleteMember(member)} title="Xóa tài khoản">
+                        <BsTrash />
                       </button>
                     )}
                     {member.role !== "company_owner" && !isActive && canUnlock && (

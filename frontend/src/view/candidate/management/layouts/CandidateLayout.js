@@ -21,7 +21,6 @@ const TEXT = {
   account: "T\u00e0i kho\u1ea3n c\u1ee7a t\u00f4i",
   dashboard: "Dashboard",
   profile: "Profile c\u00e1 nh\u00e2n",
-  resumes: "Qu\u1ea3n l\u00fd h\u1ed3 s\u01a1",
   appliedJobs: "Vi\u1ec7c l\u00e0m \u0111\u00e3 n\u1ed9p",
   savedJobs: "Vi\u1ec7c l\u00e0m \u0111\u00e3 l\u01b0u",
 };
@@ -115,8 +114,7 @@ function CandidateLayout(props) {
     if (!isAuth) return;
 
     const shouldLoadProfileCollections =
-      location.pathname.startsWith("/candidate/profile") ||
-      location.pathname.startsWith("/candidate/resumes");
+      location.pathname.startsWith("/candidate/profile");
 
     if (shouldLoadProfileCollections) {
       getProfileBundle();
@@ -193,15 +191,6 @@ function CandidateLayout(props) {
             onClick={() => handleChangePage("/candidate/profile")}
           >
             {TEXT.profile}
-          </div>
-          <div
-            className={clsx(
-              "account-menu__item",
-              currentPage === "/candidate/resumes" && "is-active"
-            )}
-            onClick={() => handleChangePage("/candidate/resumes")}
-          >
-            {TEXT.resumes}
           </div>
           <div
             className={clsx(

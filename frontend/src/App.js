@@ -1,4 +1,4 @@
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Suspense, createContext, lazy, useState } from "react";
 import { ToastContainer } from "react-toastify";
 
@@ -14,6 +14,7 @@ const AdminLayout = lazy(() => import("./view/admin/Layout"));
 const AdminLogin = lazy(() => import("./view/admin/Login"));
 const AdminDashboard = lazy(() => import("./view/admin/Dashboard"));
 const AdminJobs = lazy(() => import("./view/admin/Jobs"));
+const AdminCompanies = lazy(() => import("./view/admin/Companies"));
 const AdminAppearance = lazy(() => import("./view/admin/Appearance"));
 const AdminSkills = lazy(() => import("./view/admin/Skills"));
 const EmployerApprovals = lazy(() => import("./view/admin/EmployerApprovals"));
@@ -31,8 +32,6 @@ const SavedJobs = lazy(() => import("./view/candidate/management/SavedJobs"));
 const Signup = lazy(() => import("./view/candidate/auth/Signup"));
 const Layout = lazy(() => import("./view/candidate/layouts/Layout"));
 const Profile = lazy(() => import("./view/candidate/management/profile"));
-const Resume = lazy(() => import("./view/candidate/management/resumes"));
-const Template = lazy(() => import("./view/candidate/management/resumes/templates"));
 
 export const AppContext = createContext();
 
@@ -55,6 +54,7 @@ function App() {
                 <AdminLayout>
                   <Routes>
                     <Route index element={<AdminDashboard />} />
+                    <Route path="companies" element={<AdminCompanies />} />
                     <Route path="jobs" element={<AdminJobs />} />
                     <Route path="skills" element={<AdminSkills />} />
                     <Route path="appearance" element={<AdminAppearance />} />
@@ -84,9 +84,9 @@ function App() {
                             <Route path="applied-jobs" element={<AppliedJobs />} />
                             <Route path="saved-jobs" element={<SavedJobs />} />
                             <Route path="profile" element={<Profile />} />
-                            <Route path="resumes" element={<Resume />} />
-                            <Route path="resumes/create" element={<Template />} />
-                            <Route path="resumes/:id" element={<Template />} />
+                            <Route path="resumes" element={<Navigate to="/candidate/applied-jobs" replace />} />
+                            <Route path="resumes/create" element={<Navigate to="/candidate/applied-jobs" replace />} />
+                            <Route path="resumes/:id" element={<Navigate to="/candidate/applied-jobs" replace />} />
                           </Routes>
                         </CandidateLayout>
                       }

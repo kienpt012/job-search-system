@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\CompanyBranch;
 use App\Models\CompanyMember;
 use App\Services\CompanyAccessService;
+use App\Services\CompanyDeletionService;
 use Illuminate\Http\Request;
 
 class CompanyBranchController extends Controller
@@ -26,7 +27,7 @@ class CompanyBranchController extends Controller
 
         $validated = $request->validate([
             'name' => 'required|string|max:180',
-            'address' => 'required|string|max:500',
+            'address' => 'nullable|string|max:500',
             'map_lat' => 'nullable|numeric|between:-90,90',
             'map_lng' => 'nullable|numeric|between:-180,180',
             'contact_name' => 'nullable|string|max:120',
@@ -38,7 +39,7 @@ class CompanyBranchController extends Controller
         $branch = CompanyBranch::create([
             'employer_id' => $member->employer_id,
             'name' => $validated['name'],
-            'address' => $validated['address'],
+            'address' => $validated['address'] ?? $this->coordinateAddress($validated['map_lat'] ?? null, $validated['map_lng'] ?? null),
             'map_lat' => $validated['map_lat'] ?? null,
             'map_lng' => $validated['map_lng'] ?? null,
             'contact_name' => $validated['contact_name'] ?? null,
@@ -76,6 +77,12 @@ class CompanyBranchController extends Controller
             'is_active' => 'nullable|boolean',
         ]);
 
+        if (($validated['address'] ?? '') === '') {
+            $lat = $validated['map_lat'] ?? $branch->map_lat;
+            $lng = $validated['map_lng'] ?? $branch->map_lng;
+            $validated['address'] = $this->coordinateAddress($lat, $lng);
+        }
+
         $branch->fill($validated);
         if ($request->has('is_active') && !$branch->is_headquarters) {
             $branch->is_active = $request->boolean('is_active');
@@ -87,7 +94,7 @@ class CompanyBranchController extends Controller
         return response()->json($branch->fresh());
     }
 
-    public function destroy(CompanyAccessService $access, $id)
+    public function destroy(CompanyAccessService $access, CompanyDeletionService $deletion, $id)
     {
         $member = $access->requirePermission('delete_branches');
         $access->requireActiveSubscription($member);
@@ -97,10 +104,22 @@ class CompanyBranchController extends Controller
         }
 
         $before = $branch->toArray();
-        $branch->update(['is_active' => false]);
+        $counts = $deletion->deleteBranch($branch);
 
-        $access->log('branch.deactivated', CompanyBranch::class, $branch->id, $before, $branch->fresh()->toArray());
+        $access->log('branch.deleted', CompanyBranch::class, (int) $id, $before, $counts);
 
-        return response()->json(['message' => 'Đã ngừng hoạt động chi nhánh.']);
+        return response()->json([
+            'message' => 'Đã xóa chi nhánh và toàn bộ dữ liệu thuộc chi nhánh.',
+            'deleted' => $counts,
+        ]);
+    }
+
+    private function coordinateAddress($lat, $lng): string
+    {
+        if ($lat !== null && $lng !== null) {
+            return "Tọa độ: {$lat}, {$lng}";
+        }
+
+        return 'Chưa có địa chỉ bản đồ';
     }
 }

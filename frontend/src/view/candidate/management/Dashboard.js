@@ -22,7 +22,6 @@ const TEXT = {
   profileCompletion: "H\u1ed3 s\u01a1 \u0111\u00e3 ho\u00e0n thi\u1ec7n",
   quickActions: "Thao t\u00e1c nhanh",
   editProfile: "C\u1eadp nh\u1eadt profile",
-  manageResumes: "Qu\u1ea3n l\u00fd h\u1ed3 s\u01a1",
   viewAppliedJobs: "Xem vi\u1ec7c \u0111\u00e3 n\u1ed9p",
   viewSavedJobs: "Xem vi\u1ec7c \u0111\u00e3 l\u01b0u",
   metricApplied: "Vi\u1ec7c \u0111\u00e3 n\u1ed9p",
@@ -228,9 +227,6 @@ export default function CandidateDashboard() {
             <div className="d-flex flex-wrap gap-2 mb-4">
               <Link to="/candidate/profile" className="btn app-button-primary">
                 {TEXT.editProfile}
-              </Link>
-              <Link to="/candidate/resumes" className="btn btn-outline-primary">
-                {TEXT.manageResumes}
               </Link>
               <Link to="/candidate/applied-jobs" className="btn btn-outline-secondary">
                 {TEXT.viewAppliedJobs}

@@ -3,6 +3,7 @@ import {
   BsBarChartFill,
   BsBoxArrowRight,
   BsBriefcaseFill,
+  BsBuildingsFill,
   BsImages,
   BsPersonCheckFill,
   BsShieldLockFill,
@@ -18,6 +19,7 @@ const TEXT = {
   eyebrow: "System admin",
   title: "Recruitment Control",
   dashboard: "B\u1ea3ng \u0111i\u1ec1u khi\u1ec3n",
+  companies: "Công ty & chi nhánh",
   jobs: "Qu\u1ea3n l\u00fd vi\u1ec7c l\u00e0m",
   employerApprovals: "Duy\u1ec7t nh\u00e0 tuy\u1ec3n d\u1ee5ng",
   skills: "Th\u01b0 vi\u1ec7n k\u1ef9 n\u0103ng",
@@ -98,6 +100,17 @@ export default function AdminLayout({ children }) {
         >
           <BsTagsFill />
           <span>{TEXT.skills}</span>
+        </button>
+
+        <button
+          type="button"
+          className={`admin-sidebar__link ${
+            location.pathname.startsWith("/admin/companies") ? "is-active" : ""
+          }`}
+          onClick={() => nav("/admin/companies")}
+        >
+          <BsBuildingsFill />
+          <span>{TEXT.companies}</span>
         </button>
 
         <button

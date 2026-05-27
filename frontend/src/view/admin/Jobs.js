@@ -6,6 +6,7 @@ import {
   BsCheckCircleFill,
   BsSearch,
   BsStarFill,
+  BsTrashFill,
   BsToggleOff,
   BsToggleOn,
 } from "react-icons/bs";
@@ -85,6 +86,23 @@ export default function AdminJobs() {
       await loadJobs(filters);
     } catch (error) {
       toast.error(error?.response?.data?.message || "Không thể cập nhật việc làm.");
+    } finally {
+      setUpdatingJobId(null);
+    }
+  };
+
+  const handleDeleteJob = async (job) => {
+    if (!window.confirm(`Xóa tin "${job.jname}" và toàn bộ hồ sơ ứng tuyển liên quan?`)) {
+      return;
+    }
+
+    setUpdatingJobId(job.id);
+    try {
+      await adminApi.deleteJob(job.id);
+      toast.success("Đã xóa tin tuyển dụng.");
+      await loadJobs(filters);
+    } catch (error) {
+      toast.error(error?.response?.data?.message || "Không thể xóa tin tuyển dụng.");
     } finally {
       setUpdatingJobId(null);
     }
@@ -192,6 +210,9 @@ export default function AdminJobs() {
                       <div className="system-job-card__title">{job.jname}</div>
                       <div className="system-job-card__meta">{job.employer_name}</div>
                       <div className="system-job-card__meta">
+                        Chi nhánh: {job.branch_name || "Chưa gắn"}
+                      </div>
+                      <div className="system-job-card__meta">
                         Đăng ngày {job.post_date || "-"} • Hết hạn {job.deadline || "-"}
                       </div>
                     </div>
@@ -232,6 +253,15 @@ export default function AdminJobs() {
                   >
                     <BsStarFill />
                     <span>{job.is_hot ? "Tắt nổi bật" : "Bật nổi bật"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="admin-danger-btn"
+                    onClick={() => handleDeleteJob(job)}
+                    disabled={updatingJobId === job.id}
+                  >
+                    <BsTrashFill />
+                    <span>Xóa tin</span>
                   </button>
                 </div>
               </article>

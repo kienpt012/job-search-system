@@ -1,4 +1,5 @@
 import 'package:appflutter/main.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -9,6 +10,11 @@ void main() {
         session: AuthSession.empty(),
       ),
     );
+
+    expect(find.text('Recruitment Studio'), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.menu));
+    await tester.pumpAndSettle();
 
     expect(find.text('Recruitment'), findsOneWidget);
     expect(find.text('Việc làm'), findsWidgets);

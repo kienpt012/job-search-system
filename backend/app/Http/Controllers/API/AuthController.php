@@ -9,15 +9,19 @@ use App\Models\Jskill;
 use App\Models\Skill;
 use App\Models\User;
 use App\Services\CompanyAccessService;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
     public function __construct()
     {
-        $this->middleware('jwt', ['except' => ['login', 'register']]);
+        $this->middleware('jwt', ['except' => ['login', 'register', 'requestPasswordOtp', 'resetPasswordWithOtp']]);
     }
 
     public function login(Request $request)
@@ -105,6 +109,81 @@ class AuthController extends Controller
             'message' => 'User created successfully',
             'user' => $user,
         ], 201);
+    }
+
+    public function requestPasswordOtp(Request $request)
+    {
+        $validated = $request->validate([
+            'email' => 'required|string|email',
+            'role' => 'required|integer|in:1,2',
+        ]);
+
+        $user = User::where('email', $validated['email'])
+            ->where('role', (int) $validated['role'])
+            ->where('is_active', 1)
+            ->first();
+
+        if (!$user) {
+            throw ValidationException::withMessages([
+                'email' => 'Không tìm thấy tài khoản đang hoạt động với vai trò đã chọn.',
+            ]);
+        }
+
+        $otp = (string) random_int(100000, 999999);
+        DB::table('password_reset_tokens')->updateOrInsert(
+            ['email' => $validated['email']],
+            [
+                'token' => Hash::make($otp),
+                'created_at' => Carbon::now(),
+            ]
+        );
+
+        try {
+            Mail::raw("Mã OTP đặt lại mật khẩu Recruitment Studio của bạn là: {$otp}. Mã có hiệu lực trong 15 phút.", function ($mail) use ($validated) {
+                $mail->to($validated['email'])->subject('Mã OTP đặt lại mật khẩu');
+            });
+        } catch (\Throwable $exception) {
+            report($exception);
+        }
+
+        return response()->json(array_filter([
+            'message' => 'Đã gửi mã OTP đặt lại mật khẩu nếu email hợp lệ.',
+            'debug_otp' => app()->environment('local') ? $otp : null,
+        ]));
+    }
+
+    public function resetPasswordWithOtp(Request $request)
+    {
+        $validated = $request->validate([
+            'email' => 'required|string|email',
+            'role' => 'required|integer|in:1,2',
+            'otp' => 'required|string|size:6',
+            'password' => 'required|string|min:6',
+        ]);
+
+        $token = DB::table('password_reset_tokens')
+            ->where('email', $validated['email'])
+            ->first();
+
+        if (!$token || Carbon::parse($token->created_at)->lt(Carbon::now()->subMinutes(15)) || !Hash::check($validated['otp'], $token->token)) {
+            throw ValidationException::withMessages([
+                'otp' => 'Mã OTP không đúng hoặc đã hết hạn.',
+            ]);
+        }
+
+        $updated = User::where('email', $validated['email'])
+            ->where('role', (int) $validated['role'])
+            ->update(['password' => Hash::make($validated['password'])]);
+
+        if (!$updated) {
+            throw ValidationException::withMessages([
+                'email' => 'Không tìm thấy tài khoản với vai trò đã chọn.',
+            ]);
+        }
+
+        DB::table('password_reset_tokens')->where('email', $validated['email'])->delete();
+
+        return response()->json(['message' => 'Đã cập nhật mật khẩu.']);
     }
 
     public function me()

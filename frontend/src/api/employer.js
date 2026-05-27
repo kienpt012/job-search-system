@@ -95,5 +95,8 @@ const employerApi = {
   changeJobStatus: (job_id, data) => {
     return employerAxios.post(`${prefix}/${job_id}/changeJobStatus`, data);
   },
+  deleteJob: (id) => {
+    return employerAxios.delete(`/jobs/${id}`);
+  },
 };
 export default employerApi;

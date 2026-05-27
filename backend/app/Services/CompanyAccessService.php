@@ -22,7 +22,7 @@ class CompanyAccessService
             return null;
         }
 
-        return CompanyMember::query()
+        $member = CompanyMember::query()
             ->with([
                 'employer',
                 'branch',
@@ -31,6 +31,36 @@ class CompanyAccessService
             ->where('user_id', $userId)
             ->where('status', 'active')
             ->first();
+
+        if ($member && (!$member->employer || (int) $member->employer_id < 1)) {
+            $employer = Employer::where('user_id', $userId)->first();
+            if ($employer) {
+                $this->repairOwnerWorkspace($employer, $member);
+
+                return CompanyMember::query()
+                    ->with([
+                        'employer',
+                        'branch',
+                        'user:id,email,role,is_active',
+                    ])
+                    ->where('user_id', $userId)
+                    ->where('status', 'active')
+                    ->first();
+            }
+        }
+
+        if (!$member) {
+            $employer = Employer::where('user_id', $userId)->first();
+            if ($employer) {
+                return $this->ensureOwnerMemberForEmployer($employer)->load([
+                    'employer',
+                    'branch',
+                    'user:id,email,role,is_active',
+                ]);
+            }
+        }
+
+        return $member;
     }
 
     public function requireMember(?int $userId = null): CompanyMember
@@ -194,6 +224,10 @@ class CompanyAccessService
             'subscriptions' => fn ($query) => $query->orderByDesc('ends_at'),
         ])->find($member->employer_id);
 
+        if (!$employer) {
+            abort(404, 'Khong tim thay thong tin cong ty cua tai khoan nay.');
+        }
+
         return [
             'employer' => $employer,
             'company' => $employer,
@@ -279,9 +313,16 @@ class CompanyAccessService
 
     public function ensureOwnerMemberForEmployer(Employer $employer): CompanyMember
     {
+        if ((int) $employer->id < 1 && $employer->user_id) {
+            $employer = Employer::where('user_id', $employer->user_id)->firstOrFail();
+        }
+
+        $employerId = (int) $employer->id;
+        $this->repairOwnerWorkspace($employer);
+
         $branch = CompanyBranch::firstOrCreate(
             [
-                'employer_id' => $employer->id,
+                'employer_id' => $employerId,
                 'is_headquarters' => true,
             ],
             [
@@ -295,15 +336,61 @@ class CompanyAccessService
             ]
         );
 
-        return CompanyMember::firstOrCreate(
+        return CompanyMember::updateOrCreate(
             ['user_id' => $employer->user_id],
             [
-                'employer_id' => $employer->id,
+                'employer_id' => $employerId,
                 'branch_id' => null,
                 'role' => CompanyMember::ROLE_COMPANY_OWNER,
                 'title' => 'Tài khoản tổng công ty',
                 'status' => 'active',
             ]
         );
+    }
+
+    private function repairOwnerWorkspace(Employer $employer, ?CompanyMember $member = null): void
+    {
+        $employerId = (int) $employer->id;
+        if ($employerId < 1) {
+            return;
+        }
+
+        $hasHeadquarters = CompanyBranch::where('employer_id', $employerId)
+            ->where('is_headquarters', true)
+            ->exists();
+
+        if (!$hasHeadquarters) {
+            $misplacedBranch = CompanyBranch::where('employer_id', 0)
+                ->where('is_headquarters', true)
+                ->where(function ($query) use ($employer, $member) {
+                    $query
+                        ->where('address', $employer->address)
+                        ->orWhere('phone', $employer->phone)
+                        ->orWhere('contact_name', $employer->contact_name);
+
+                    if ($member?->created_at) {
+                        $query->orWhere('created_at', $member->created_at);
+                    }
+                })
+                ->orderByDesc('id')
+                ->first();
+
+            if ($misplacedBranch) {
+                $misplacedBranch->employer_id = $employerId;
+                $misplacedBranch->save();
+            }
+        }
+
+        if (
+            $member
+            && (int) $member->user_id === (int) $employer->user_id
+            && ((int) $member->employer_id !== $employerId || $member->role !== CompanyMember::ROLE_COMPANY_OWNER)
+        ) {
+            $member->employer_id = $employerId;
+            $member->branch_id = null;
+            $member->role = CompanyMember::ROLE_COMPANY_OWNER;
+            $member->status = 'active';
+            $member->save();
+        }
     }
 }

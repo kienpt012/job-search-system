@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BsArrowRepeat,
   BsBarChartFill,
+  BsBoxArrowInRight,
   BsBuildingsFill,
   BsCheckCircleFill,
   BsFillPeopleFill,
@@ -614,6 +615,28 @@ export default function AdminDashboard() {
     }
   };
 
+  const handleImpersonateUser = async (user) => {
+    try {
+      const response = await adminApi.impersonateUser(user.id);
+      const token = response?.authorization?.token;
+      const role = Number(response?.role);
+      if (!token) throw new Error("Missing token");
+
+      if (role === 0) {
+        localStorage.setItem("admin_jwt", token);
+        window.location.assign("/admin");
+      } else if (role === 1) {
+        localStorage.setItem("candidate_jwt", token);
+        window.location.assign("/candidate");
+      } else if (role === 2) {
+        localStorage.setItem("employer_jwt", token);
+        window.location.assign("/employer");
+      }
+    } catch (error) {
+      toast.error(error?.response?.data?.message || "Không thể đăng nhập thay tài khoản này.");
+    }
+  };
+
   const handleUpdatePassword = async () => {
     if (!selectedUser) {
       toast.info("Chọn tài khoản cần đổi mật khẩu.");
@@ -1063,6 +1086,9 @@ export default function AdminDashboard() {
                         </button>
                         <button type="button" onClick={() => handleToggleUser(user)}>
                           {user.is_active ? <BsLockFill /> : <BsArrowRepeat />}
+                        </button>
+                        <button type="button" onClick={() => handleImpersonateUser(user)}>
+                          <BsBoxArrowInRight />
                         </button>
                         <button type="button" className="is-danger" onClick={() => handleDeleteUser(user)}>
                           <BsTrashFill />

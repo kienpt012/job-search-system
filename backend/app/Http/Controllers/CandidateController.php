@@ -222,37 +222,65 @@ class CandidateController extends Controller
 
     public function getAppliedJobs($id)
     {
-        $jobs = Job::join('job_applying', 'id', '=', 'job_id')
-            ->join('employers', 'employer_id', '=', 'employers.id')
-            ->where('candidate_id', $id)
+        return response()->json($this->appliedJobsQuery((int) $id)->get());
+    }
+
+    public function getCurrentAppliedJobs()
+    {
+        return response()->json($this->appliedJobsQuery((int) Auth::id())->get());
+    }
+
+    private function appliedJobsQuery(int $candidateId)
+    {
+        return Job::query()
+            ->join('job_applying', 'jobs.id', '=', 'job_applying.job_id')
+            ->join('employers', 'jobs.employer_id', '=', 'employers.id')
+            ->leftJoin('company_branches', 'jobs.branch_id', '=', 'company_branches.id')
+            ->where('job_applying.candidate_id', $candidateId)
             ->where('jobs.is_active', 1)
             ->where('employers.is_active', 1)
             ->select(
                 'jobs.id',
-                'jname',
+                'jobs.jname',
+                'jobs.employer_id',
                 'employers.name',
-                'cv_link',
-                'status',
+                'employers.name as employer_name',
+                'employers.logo as employer_logo',
+                'employers.address as employer_address',
+                'employers.map_lat as employer_map_lat',
+                'employers.map_lng as employer_map_lng',
+                'company_branches.name as branch_name',
+                'company_branches.address as branch_address',
+                'company_branches.map_lat as branch_map_lat',
+                'company_branches.map_lng as branch_map_lng',
+                'job_applying.resume_id',
+                'job_applying.cv_link',
+                'job_applying.status as status',
                 DB::raw('DATE_FORMAT(job_applying.created_at, "%d/%m/%Y") as postDate')
             )
-            ->orderByDesc('job_applying.created_at')
-            ->get();
-
-        return response()->json($jobs);
+            ->orderByDesc('job_applying.created_at');
     }
 
     public function getSavedJobs($id)
     {
-        $jobs = Job::with(['employer', 'locations'])
+        return response()->json($this->savedJobsQuery((int) $id)->get());
+    }
+
+    public function getCurrentSavedJobs()
+    {
+        return response()->json($this->savedJobsQuery((int) Auth::id())->get());
+    }
+
+    private function savedJobsQuery(int $candidateId)
+    {
+        return Job::with(['employer:id,name,logo', 'locations:id,name', 'branch:id,name,address,map_lat,map_lng'])
             ->join('employers', 'jobs.employer_id', '=', 'employers.id')
-            ->join('saved_jobs', 'id', '=', 'job_id')
-            ->where('candidate_id', $id)
+            ->join('saved_jobs', 'jobs.id', '=', 'saved_jobs.job_id')
+            ->where('saved_jobs.candidate_id', $candidateId)
             ->where('jobs.is_active', 1)
             ->where('employers.is_active', 1)
-            ->select('jobs.*', DB::raw('DATE_FORMAT(expire_at, "%d/%m/%Y") as deadline'))
-            ->get();
-
-        return response()->json($jobs);
+            ->select('jobs.*', DB::raw('DATE_FORMAT(jobs.expire_at, "%d/%m/%Y") as deadline'))
+            ->orderByDesc('saved_jobs.job_id');
     }
 
     public function checkJobSaved($job_id)
