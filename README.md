@@ -10,8 +10,7 @@ Project được tách thành:
 
 - `frontend`: React
 - `backend`: Laravel API
-- `docs`: tài liệu cập nhật DB / hướng dẫn các module đã bổ sung
-
+- 
 ## 1. Tính năng chính
 
 ### Ứng viên
