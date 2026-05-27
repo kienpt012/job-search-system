@@ -127,75 +127,12 @@ REACT_APP_API_URL=http://127.0.0.1:8000
 
 ## 6. Khởi tạo database
 
-Có 2 cách:
-
-### Cách A: dùng Laravel migration
 
 ```powershell
 cd backend
 php artisan migrate
 ```
 
-### Cách B: import DB mẫu / SQL cũ rồi cập nhật thêm
-
-Nếu bạn đang dùng database import từ bản cũ hoặc từ `recruitment.sql`, cần đảm bảo đã có các thay đổi mới:
-
-- `employers.map_lat`
-- `employers.map_lng`
-- `candidates.map_lat`
-- `candidates.map_lng`
-- bảng `hero_slides`
-- `hero_slides.sort_order`
-
-Tài liệu chi tiết:
-
-- [docs/company-location-map-update.md](docs/company-location-map-update.md)
-- [docs/candidate-location-nearby-update.md](docs/candidate-location-nearby-update.md)
-- [docs/system-admin-update.md](docs/system-admin-update.md)
-
-### SQL thủ công cho các phần mới
-
-#### Thêm map cho công ty
-
-```sql
-ALTER TABLE employers
-  ADD COLUMN map_lat DECIMAL(10,7) NULL AFTER address,
-  ADD COLUMN map_lng DECIMAL(10,7) NULL AFTER map_lat;
-```
-
-#### Thêm map cho candidate
-
-```sql
-ALTER TABLE candidates
-  ADD COLUMN map_lat DECIMAL(10,7) NULL AFTER address,
-  ADD COLUMN map_lng DECIMAL(10,7) NULL AFTER map_lat;
-```
-
-#### Tạo bảng hero slider
-
-```sql
-CREATE TABLE hero_slides (
-  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  image VARCHAR(255) NOT NULL,
-  target_type VARCHAR(20) NOT NULL,
-  target_company_id BIGINT UNSIGNED NULL,
-  target_job_id BIGINT UNSIGNED NULL,
-  custom_url VARCHAR(1000) NULL,
-  is_active TINYINT(1) NOT NULL DEFAULT 1,
-  sort_order INT UNSIGNED NOT NULL DEFAULT 0,
-  created_at TIMESTAMP NULL,
-  updated_at TIMESTAMP NULL
-);
-```
-
-#### Gán thứ tự ban đầu cho slide
-
-```sql
-SET @rownum := 0;
-UPDATE hero_slides
-SET sort_order = (@rownum := @rownum + 1)
-ORDER BY id;
-```
 
 ## 7. Chạy project local
 
@@ -243,69 +180,11 @@ Frontend mặc định:
 - Dashboard:
   - `http://localhost:3000/admin`
 
-Nếu bạn đang dùng DB mẫu có admin role `0`, xem thêm:
-
-- [docs/system-admin-update.md](docs/system-admin-update.md)
-
 Tài khoản admin mẫu trong tài liệu:
 
 - Email: `admin@local.test`
 - Password: `Admin@123`
 
 ## 9. Lưu trữ file local trong project
-
-Hệ thống hiện lưu nhiều tài nguyên trực tiếp trong thư mục dự án:
-
-- CV nộp việc: `backend/storage/cv_images`
-- Logo công ty: `backend/storage/company_logos`
-- Ảnh nền công ty: `backend/storage/company_covers`
-- Ảnh hero slider: `backend/storage/hero_slides`
-- Avatar candidate: `backend/public/storage/avatar_images`
-
-Các route public để đọc file được khai báo trong:
-
-- [backend/routes/web.php](backend/routes/web.php)
-
-## 10. Ghi chú nghiệp vụ quan trọng
-
-- Công ty bị khóa sẽ bị ẩn khỏi phía người dùng
-- Job của công ty bị khóa cũng sẽ bị ẩn
-- Ứng tuyển bằng hồ sơ online sẽ được render thành PDF trước khi nộp
-- Ứng tuyển bằng upload hiện được kiểm soát để lưu file trong project
-- Vị trí công ty và vị trí ứng viên lưu bằng `lat/lng`, không lưu iframe nhúng map trong database
-- Hero slider trang chủ hỗ trợ click điều hướng và sắp xếp thứ tự hiển thị
-
-## 11. Build / kiểm tra
-
-### Frontend
-
-```powershell
-cd frontend
-npm run build
-```
-
-### Backend kiểm tra cú pháp nhanh
-
-```powershell
-cd backend
-php -l app/Http/Controllers/HeroSlideController.php
-php -l app/Http/Controllers/CandidateController.php
-php -l app/Http/Controllers/EmployerController.php
-php -l app/Http/Controllers/AdminController.php
-```
-
-## 12. Tài liệu bổ sung
-
-- [docs/system-admin-update.md](docs/system-admin-update.md)
-- [docs/company-location-map-update.md](docs/company-location-map-update.md)
-- [docs/candidate-location-nearby-update.md](docs/candidate-location-nearby-update.md)
-
-## 13. Định hướng mở rộng
-
-- Chỉnh sửa slide đã tạo thay vì chỉ thêm / xóa
-- Phân trang và filter nâng cao trong admin
-- Tìm kiếm theo khoảng cách cho candidate
-- Theo dõi hiệu quả click / conversion của hero slider
-- Notification realtime hoàn chỉnh hơn cho employer / admin
 
 ---
