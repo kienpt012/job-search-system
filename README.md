@@ -184,7 +184,4 @@ Tài khoản admin mẫu trong tài liệu:
 
 - Email: `admin@local.test`
 - Password: `Admin@123`
-
-## 9. Lưu trữ file local trong project
-
 ---
