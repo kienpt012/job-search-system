@@ -10,7 +10,7 @@ Project được tách thành:
 
 - `frontend`: React
 - `backend`: Laravel API
-- 
+  
 ## 1. Tính năng chính
 
 ### Ứng viên
